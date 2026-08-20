@@ -5,7 +5,7 @@ A fully local Pinokio music app built on MiniMax Music 3. Describe a song in ord
 ## Engines
 
 - Windows and Linux use the native ComfyUI MiniMax implementation with the pruned INT8 text encoder, INT8 DiT, DynamicVRAM, CUDA graphs, prefetch, and automatic tiled decoding.
-- Apple Silicon uses audio.cpp with Q4 language and flow models, AB2 sampling, and stage-by-stage memory saving. Its arm64 server executable and license are bundled with MiniJam; Install verifies the pinned SHA-256 before enabling it.
+- Apple Silicon uses audio.cpp with Q4 language and flow models and AB2 sampling. Macs with at least 32 GB unified memory use the faster resident-stage configuration; smaller Macs keep stage-by-stage memory saving enabled. Its arm64 server executable and license are bundled with MiniJam; Install verifies the pinned SHA-256 before enabling it.
 
 The app keeps the useful local workflow—browser player, downloads, MP4 sharing, and a local song feed—without a cover-art model or unrelated diffusion dependencies.
 
@@ -22,10 +22,14 @@ The app keeps the useful local workflow—browser player, downloads, MP4 sharing
 2. Click **Start**, then open **MiniJam**.
 3. Describe a song, select its duration and optional instrumental mode, then click **Generate**.
 4. Leave **Music** on **Auto** unless you need a specific tradeoff:
-   - **Low VRAM** uses 20 flow steps and tiled decoding on ComfyUI; audio.cpp uses its 15-step Q4 path.
-   - **Quality** uses the Space-compatible 30 steps where memory permits.
+   - **Low VRAM** uses 20 flow steps and tiled decoding on ComfyUI; audio.cpp keeps its 15-step Q4 path.
+   - **Quality** uses the Space-compatible 30 steps on ComfyUI and 20 steps on audio.cpp.
 
-The local writer is CPU-first and closes immediately after composing the song. On systems below 40 GB RAM, the music engine is unloaded before the writer runs so both large models are not resident simultaneously.
+The Music dropdown changes generation steps and ComfyUI decoding on each request. On macOS, the separate audio.cpp memory strategy is selected once at startup from installed RAM: fast resident stages at 32 GB or more, stage memory saving below 32 GB.
+
+The local writer closes immediately after composing the song. It defaults to full Metal offload on Apple Silicon and CPU on Windows/Linux so it does not compete with the ComfyUI music model for VRAM. On systems below 40 GB RAM, the music engine is unloaded before the writer runs so both large models are not resident simultaneously.
+
+The browser reports Writer preparation with an elapsed timer, real ComfyUI sampling progress on Windows/Linux, and audio.cpp AR/flow/vocoder progress on macOS. A first-time Metal kernel compilation has no granular events in audio.cpp, so that phase is shown honestly as indeterminate preparation until the first generation event arrives.
 
 ## Space behavior retained
 
@@ -51,7 +55,7 @@ When an older installation is upgraded, Install removes its obsolete music-model
 Composer environment overrides:
 
 - `MINIMAX_COMPOSER_PROFILE=tiny|balanced|quality`
-- `MINIMAX_COMPOSER_GPU_LAYERS=0` (the default keeps VRAM free for MiniMax)
+- `MINIMAX_COMPOSER_GPU_LAYERS=<number>` (`-1` is the Apple Silicon default for full Metal offload; `0` forces CPU and is the Windows/Linux default)
 
 ## API
 
@@ -61,7 +65,9 @@ The app exposes four named Gradio APIs:
 
 - `/create`
   - Parameters: `description`, `audio_duration`, `seed`, `community`, `composer_profile`, `generation_mode`, `instrumental`
-  - Returns JSON containing `audio`, `title`, `tags`, `lyrics`, `caption`, `bpm`, `language`, `composer_profile`, `composer_model`, `generation_mode`, `seed`, `duration`, `steps`, `tiled_decode`, and optionally `community_url`.
+  - Streams JSON progress messages containing `type`, `stage`, `message`, `progress`, and `elapsed`, followed by the final JSON song.
+  - The final song contains `audio`, `title`, `tags`, `lyrics`, `caption`, `bpm`, `language`, `composer_profile`, `composer_model`, `generation_mode`, `seed`, `duration`, `steps`, `tiled_decode`, and optionally `community_url`.
+  - `predict()` clients still receive the final song only; use a submitted job or the curl event stream to consume intermediate progress.
 - `/generate`
   - Parameters: `prompt`, `lyrics`, `audio_duration`, `steps`, `seed`, `generation_mode`
   - `prompt` is an explicit MiniMax production caption.
@@ -78,7 +84,7 @@ The app exposes four named Gradio APIs:
 import { Client } from "@gradio/client";
 
 const client = await Client.connect("http://127.0.0.1:7860");
-const result = await client.predict("/create", {
+const job = client.submit("/create", {
   description: "Dreamy female synth-pop about leaving home",
   audio_duration: 60,
   seed: -1,
@@ -88,7 +94,16 @@ const result = await client.predict("/create", {
   instrumental: false
 });
 
-const song = JSON.parse(result.data[0]);
+let song;
+for await (const event of job) {
+  if (event.type !== "data") continue;
+  const value = JSON.parse(event.data[0]);
+  if (value.type === "progress") {
+    console.log(value.message, value.progress, value.elapsed);
+  } else {
+    song = value;
+  }
+}
 console.log(song.title, song.generation_mode, song.audio);
 ```
 

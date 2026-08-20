@@ -8,7 +8,7 @@ import re
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from huggingface_hub import hf_hub_download
 
@@ -509,8 +509,8 @@ class LocalComposer:
             vram_gb = _gpu_memory_gb()
             long_vocal_request = (not instrumental) and audio_duration >= 90
             if _is_apple_mps():
-                # Apple Silicon ends up CPU-driving the local composer in this launcher.
-                # Keep short requests fast, but move long vocal songs to the stronger composer.
+                # Metal offload keeps short requests fast while unified-memory Macs can
+                # use the stronger composer for long vocal structures.
                 key = "quality" if long_vocal_request else "tiny"
             elif long_vocal_request:
                 if (ram_gb is not None and ram_gb >= 24) or (vram_gb is not None and vram_gb >= 16):
@@ -534,7 +534,12 @@ class LocalComposer:
         audio_duration: float = 60.0,
         profile: str = "auto",
         instrumental: bool = False,
+        progress_callback: Callable[[str, float | None], None] | None = None,
     ) -> dict[str, Any]:
+        def progress(message: str, value: float | None = None) -> None:
+            if progress_callback is not None:
+                progress_callback(message, value)
+
         compose_started_at = time.perf_counter()
         selected = self.resolve_profile(profile, audio_duration=audio_duration, instrumental=instrumental)
         print(
@@ -545,9 +550,11 @@ class LocalComposer:
             f"duration={audio_duration} "
             f"instrumental={instrumental}"
         )
+        progress(f"Preparing {selected.label} writer…")
         model_path = self._ensure_model(selected)
         ensure_elapsed = time.perf_counter() - compose_started_at
         print(f"[composer] model ready path={model_path} elapsed={ensure_elapsed:.2f}s")
+        progress(f"Loading {selected.label} writer…")
         load_started_at = time.perf_counter()
         llm = self._load_llm(selected, model_path)
         load_elapsed = time.perf_counter() - load_started_at
@@ -565,6 +572,7 @@ class LocalComposer:
         try:
             generation_started_at = time.perf_counter()
             print("[composer] generating song spec...")
+            progress("Writing the title, lyrics, and production plan…")
             response = llm.create_chat_completion(
                 messages=[
                     {"role": "system", "content": SYSTEM_PROMPT},
@@ -582,6 +590,7 @@ class LocalComposer:
             content = response["choices"][0]["message"]["content"] or "{}"
             generation_elapsed = time.perf_counter() - generation_started_at
             print(f"[composer] completion received elapsed={generation_elapsed:.2f}s chars={len(content)}")
+            progress("Checking the song structure…")
             _log_block("composer.raw_response", content)
             payload = _extract_json(content)
             print(f"[composer] parsed response keys={sorted(payload.keys())}")
@@ -676,12 +685,20 @@ class LocalComposer:
                 "llama-cpp-python is not installed in app/env. Re-run Install or Update."
             ) from exc
 
-        gpu_layers = int(os.environ.get("MINIMAX_COMPOSER_GPU_LAYERS", "0") or "0")
+        default_gpu_layers = -1 if _is_apple_mps() else 0
+        configured_gpu_layers = os.environ.get("MINIMAX_COMPOSER_GPU_LAYERS", "").strip()
+        gpu_layers = int(configured_gpu_layers) if configured_gpu_layers else default_gpu_layers
+        gpu_layers = max(-1, gpu_layers)
+        print(
+            "[composer] "
+            f"llama backend={'metal' if _is_apple_mps() and gpu_layers != 0 else 'cpu'} "
+            f"gpu_layers={gpu_layers}"
+        )
         return Llama(
             model_path=str(model_path),
             n_ctx=profile.n_ctx,
             n_batch=min(512, profile.n_ctx),
-            n_gpu_layers=max(0, gpu_layers),
+            n_gpu_layers=gpu_layers,
             n_threads=max(1, (os.cpu_count() or 4) - 1),
             verbose=False,
         )

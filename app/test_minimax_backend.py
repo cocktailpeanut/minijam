@@ -1,13 +1,16 @@
 from __future__ import annotations
 
 import ast
+import base64
 import json
 import os
+import sys
+import types
 import unittest
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-from local_composer import _fallback_caption, _normalize_lyrics
+from local_composer import COMPOSER_PROFILES, LocalComposer, _fallback_caption, _normalize_lyrics
 from minimax_backend import MiniMaxBackend
 
 
@@ -49,6 +52,12 @@ class ApiContractTests(unittest.TestCase):
         self.assertIn('<span class="setting-label">Music</span>', frontend)
         self.assertIn("setting.steps", frontend)
         self.assertIn("tiled decode", frontend)
+
+    def test_frontend_consumes_streamed_generation_progress(self):
+        frontend = (HERE / "index.html").read_text(encoding="utf-8")
+        self.assertIn('result.type === "progress"', frontend)
+        self.assertIn("setProgress(result.message, result.progress, result.elapsed)", frontend)
+        self.assertIn('fill.classList.add("indeterminate")', frontend)
 
 
 class MiniMaxBackendTests(unittest.TestCase):
@@ -99,8 +108,111 @@ class MiniMaxBackendTests(unittest.TestCase):
         )
         response.raise_for_status.assert_called_once_with()
 
+    def test_audiocpp_stream_reports_real_stage_progress(self):
+        backend = self.backend("audiocpp")
+        response = MagicMock(status_code=200)
+        response.iter_lines.return_value = [
+            'data: {"type":"progress","stage":"flow","step":3,"total":15}',
+            "",
+            'data: {"type":"result","result":{"audio":"'
+            + base64.b64encode(b"audio").decode()
+            + '"}}',
+            "",
+        ]
+        backend.session.post = MagicMock(return_value=response)
+        events = []
+        with patch("minimax_backend._to_wav", return_value=b"decoded"):
+            result = backend._generate_audiocpp(
+                "caption",
+                "[instrumental]",
+                30,
+                7,
+                15,
+                lambda message, progress: events.append((message, progress)),
+            )
+        self.assertEqual(result, b"decoded")
+        self.assertTrue(any("Rendering the song" in message for message, _ in events))
+        self.assertTrue(any(progress is not None for _, progress in events))
+        backend.session.post.assert_called_once()
+        self.assertTrue(backend.session.post.call_args.kwargs["stream"])
+        self.assertTrue(backend.session.post.call_args.args[0].endswith("/v1/tasks/run-stream"))
+        response.close.assert_called_once_with()
+
+    def test_comfy_websocket_reports_sampler_progress(self):
+        backend = self.backend("comfyui")
+        websocket = MagicMock()
+        websocket.recv.return_value = json.dumps(
+            {
+                "type": "progress",
+                "data": {"prompt_id": "prompt-1", "value": 5, "max": 20},
+            }
+        )
+
+        def fake_json(method, path, **_kwargs):
+            if method == "POST" and path == "/prompt":
+                return {"prompt_id": "prompt-1"}
+            if method == "GET" and path == "/history/prompt-1":
+                return {
+                    "prompt-1": {
+                        "status": {"completed": True},
+                        "outputs": {
+                            "9": {
+                                "audio": [
+                                    {"filename": "song.flac", "subfolder": "", "type": "output"}
+                                ]
+                            }
+                        },
+                    }
+                }
+            raise AssertionError((method, path))
+
+        backend._json = fake_json
+        backend.session.get = MagicMock(return_value=MagicMock(status_code=200, content=b"audio"))
+        events = []
+        with (
+            patch("websockets.sync.client.connect", return_value=websocket),
+            patch("minimax_backend._to_wav", return_value=b"decoded"),
+        ):
+            result = backend._generate_comfy(
+                "caption",
+                "[instrumental]",
+                30,
+                7,
+                20,
+                True,
+                lambda message, progress: events.append((message, progress)),
+            )
+        self.assertEqual(result, b"decoded")
+        self.assertTrue(any("Rendering the audio" in message for message, _ in events))
+        self.assertTrue(any(progress == 0.25 for _, progress in events))
+        websocket.close.assert_called_once_with()
+
 
 class ComposerContractTests(unittest.TestCase):
+    def test_apple_silicon_writer_defaults_to_full_metal_offload(self):
+        llama = MagicMock()
+        composer = LocalComposer(HERE / "composer_models")
+        fake_module = types.SimpleNamespace(Llama=llama)
+        with (
+            patch("local_composer._is_apple_mps", return_value=True),
+            patch.dict(os.environ, {"MINIMAX_COMPOSER_GPU_LAYERS": ""}, clear=False),
+            patch.dict(sys.modules, {"llama_cpp": fake_module}),
+        ):
+            composer._load_llm(COMPOSER_PROFILES["tiny"], HERE / "unused.gguf")
+        self.assertEqual(llama.call_args.kwargs["n_gpu_layers"], -1)
+
+    def test_writer_gpu_layer_override_can_force_cpu(self):
+        llama = MagicMock()
+        composer = LocalComposer(HERE / "composer_models")
+        fake_module = types.SimpleNamespace(Llama=llama)
+        with (
+            patch("local_composer._is_apple_mps", return_value=True),
+            patch.dict(os.environ, {"MINIMAX_COMPOSER_GPU_LAYERS": "0"}, clear=False),
+            patch.dict(sys.modules, {"llama_cpp": fake_module}),
+        ):
+            composer._load_llm(COMPOSER_PROFILES["tiny"], HERE / "unused.gguf")
+        self.assertEqual(llama.call_args.kwargs["n_gpu_layers"], 0)
+
     def test_section_tags_are_normalized_for_minimax(self):
         lyrics = _normalize_lyrics("[Verse 1] first line\n[Hook] chorus line", instrumental=False)
         self.assertEqual(lyrics, "[verse]\nfirst line\n[chorus]\nchorus line")

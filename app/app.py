@@ -4,11 +4,14 @@ import base64
 import gc
 import json
 import os
+import queue
+import threading
 import time
 import traceback
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any, Iterator
 
 for name in ["http_proxy", "https_proxy", "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY"]:
     os.environ.pop(name, None)
@@ -143,83 +146,136 @@ def create(
     composer_profile: str = "auto",
     generation_mode: str = "auto",
     instrumental: bool = False,
-) -> str:
+) -> Iterator[str]:
     started_at = time.perf_counter()
-    try:
-        description = (description or "").strip()
-        if not description:
-            raise ValueError("Describe the song you want first")
-        duration = _clamp_duration(audio_duration)
-        print(
-            "[create] "
-            f"duration={duration} seed={seed} save={community} "
-            f"composer_profile={composer_profile} generation_mode={generation_mode} instrumental={instrumental}"
-        )
-        _log_block("create.description", description)
+    event_queue: queue.Queue[tuple[str, Any]] = queue.Queue()
+    progress_lock = threading.Lock()
+    progress_state: dict[str, Any] = {
+        "stage": "setup",
+        "message": "Preparing the local writer…",
+        "progress": None,
+    }
+    last_event: tuple[str, str, float | None] | None = None
 
-        # On RAM-constrained machines, avoid keeping staged MiniMax weights resident
-        # while llama.cpp loads the local song writer.
-        backend.unload_for_composer(generation_mode)
-        resolved_composer_profile = _composer_profile_for_hardware(composer_profile, generation_mode)
-        compose_started = time.perf_counter()
-        composed = composer.compose(
-            description=description,
-            audio_duration=duration,
-            profile=resolved_composer_profile,
-            instrumental=instrumental,
-        )
-        compose_elapsed = time.perf_counter() - compose_started
-        gc.collect()
-        _log_block("create.minimax_caption", composed["caption"])
-        _log_block("create.minimax_lyrics", composed["lyrics"])
+    def report(stage: str, message: str, value: float | None = None) -> None:
+        nonlocal last_event
+        if value is not None:
+            value = max(0.0, min(1.0, float(value)))
+        event_key = (stage, message, value)
+        with progress_lock:
+            progress_state.update(stage=stage, message=message, progress=value)
+            if event_key == last_event:
+                return
+            last_event = event_key
+        event_queue.put(("progress", dict(progress_state)))
 
-        generation_started = time.perf_counter()
-        generated = backend.generate(
-            caption=composed["caption"],
-            lyrics=composed["lyrics"],
-            duration=duration,
-            seed=seed,
-            mode=generation_mode,
-        )
-        generation_elapsed = time.perf_counter() - generation_started
-        encoded = base64.b64encode(generated.wav_bytes).decode()
-        result = {
-            "audio": f"data:audio/wav;base64,{encoded}",
-            "title": composed["title"],
-            "tags": composed["tags"],
-            "lyrics": composed["lyrics"],
-            "caption": composed["caption"],
-            "bpm": composed["bpm"],
-            "language": composed["language"],
-            "composer_profile": composed["composer_profile"],
-            "composer_model": composed["composer_model"],
-            "generation_mode": generated.mode,
-            "seed": generated.seed,
-            "duration": round(generated.duration, 1),
-            "steps": generated.steps,
-            "tiled_decode": generated.tiled_decode,
-        }
-        if community:
-            entry = _save_song(
-                generated.wav_bytes,
-                description=description,
-                composed=composed,
-                duration=generated.duration,
-                seed=generated.seed,
-                generation_mode=generated.mode,
+    def run_generation() -> None:
+        try:
+            cleaned_description = (description or "").strip()
+            if not cleaned_description:
+                raise ValueError("Describe the song you want first")
+            duration = _clamp_duration(audio_duration)
+            print(
+                "[create] "
+                f"duration={duration} seed={seed} save={community} "
+                f"composer_profile={composer_profile} generation_mode={generation_mode} instrumental={instrumental}"
             )
-            result["community_url"] = entry["audio_url"]
+            _log_block("create.description", cleaned_description)
 
-        total_elapsed = time.perf_counter() - started_at
-        print(
-            "[create timing] "
-            f"compose={compose_elapsed:.2f}s generate={generation_elapsed:.2f}s total={total_elapsed:.2f}s"
-        )
-        return json.dumps(result, ensure_ascii=False)
-    except Exception as exc:
-        print(f"[create ERROR] {type(exc).__name__}: {exc}")
-        print(traceback.format_exc())
-        raise
+            # On RAM-constrained machines, avoid keeping staged MiniMax weights resident
+            # while llama.cpp loads the local song writer.
+            report("setup", "Making memory available for the local writer…")
+            backend.unload_for_composer(generation_mode)
+            resolved_composer_profile = _composer_profile_for_hardware(composer_profile, generation_mode)
+            compose_started = time.perf_counter()
+            composed = composer.compose(
+                description=cleaned_description,
+                audio_duration=duration,
+                profile=resolved_composer_profile,
+                instrumental=instrumental,
+                progress_callback=lambda message, value: report("writer", message, value),
+            )
+            compose_elapsed = time.perf_counter() - compose_started
+            gc.collect()
+            _log_block("create.minimax_caption", composed["caption"])
+            _log_block("create.minimax_lyrics", composed["lyrics"])
+
+            report("music", "Preparing the MiniMax music engine…")
+            generation_started = time.perf_counter()
+            generated = backend.generate(
+                caption=composed["caption"],
+                lyrics=composed["lyrics"],
+                duration=duration,
+                seed=seed,
+                mode=generation_mode,
+                progress_callback=lambda message, value: report("music", message, value),
+            )
+            generation_elapsed = time.perf_counter() - generation_started
+            report("finishing", "Packaging the finished song…", 1.0)
+            encoded = base64.b64encode(generated.wav_bytes).decode()
+            result = {
+                "audio": f"data:audio/wav;base64,{encoded}",
+                "title": composed["title"],
+                "tags": composed["tags"],
+                "lyrics": composed["lyrics"],
+                "caption": composed["caption"],
+                "bpm": composed["bpm"],
+                "language": composed["language"],
+                "composer_profile": composed["composer_profile"],
+                "composer_model": composed["composer_model"],
+                "generation_mode": generated.mode,
+                "seed": generated.seed,
+                "duration": round(generated.duration, 1),
+                "steps": generated.steps,
+                "tiled_decode": generated.tiled_decode,
+            }
+            if community:
+                entry = _save_song(
+                    generated.wav_bytes,
+                    description=cleaned_description,
+                    composed=composed,
+                    duration=generated.duration,
+                    seed=generated.seed,
+                    generation_mode=generated.mode,
+                )
+                result["community_url"] = entry["audio_url"]
+
+            total_elapsed = time.perf_counter() - started_at
+            print(
+                "[create timing] "
+                f"compose={compose_elapsed:.2f}s generate={generation_elapsed:.2f}s total={total_elapsed:.2f}s"
+            )
+            event_queue.put(("result", json.dumps(result, ensure_ascii=False)))
+        except Exception as exc:
+            print(f"[create ERROR] {type(exc).__name__}: {exc}")
+            print(traceback.format_exc())
+            event_queue.put(("error", exc))
+        finally:
+            gc.collect()
+
+    report("setup", "Preparing the local writer…")
+    worker = threading.Thread(target=run_generation, name="minijam-generation", daemon=True)
+    worker.start()
+
+    try:
+        while True:
+            try:
+                event_type, payload = event_queue.get(timeout=1.0)
+            except queue.Empty:
+                with progress_lock:
+                    payload = dict(progress_state)
+                payload["heartbeat"] = True
+                event_type = "progress"
+
+            if event_type == "progress":
+                payload["type"] = "progress"
+                payload["elapsed"] = round(time.perf_counter() - started_at, 1)
+                yield json.dumps(payload, ensure_ascii=False)
+            elif event_type == "result":
+                yield payload
+                break
+            elif event_type == "error":
+                raise payload
     finally:
         gc.collect()
 
@@ -276,6 +332,7 @@ def config(audio_duration: float = 60.0) -> str:
             "generation_mode_settings": generation_mode_settings,
             "engine": info.get("engine"),
             "engine_label": info.get("label"),
+            "memory_mode": info.get("memory_mode"),
             "max_duration": MAX_DURATION,
         }
     )

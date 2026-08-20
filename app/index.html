@@ -169,8 +169,18 @@
     }
 
     /* ── Status ───────────────────────────────────────────────────────────── */
-    .status-bar { font-size: 11.5px; color: var(--text-muted); text-align: center; padding: 0; min-height: 0; display: none; }
-    .status-bar.error { display: block; color: var(--error); padding: 6px 0; }
+    .status-bar { font-size: 11.5px; color: var(--text-muted); padding: 0; min-height: 0; display: none; }
+    .status-bar.active { display: block; padding: 6px 0 9px; }
+    .status-line { display: flex; justify-content: space-between; gap: 10px; margin-bottom: 5px; }
+    .status-elapsed { color: var(--text-faint); font-variant-numeric: tabular-nums; white-space: nowrap; }
+    .progress-track { height: 3px; overflow: hidden; border-radius: 2px; background: var(--surface-2); }
+    .progress-fill { width: 0; height: 100%; border-radius: inherit; background: var(--progress); transition: width 0.25s ease; }
+    .progress-fill.indeterminate { width: 35%; animation: progress-sweep 1.3s ease-in-out infinite; }
+    @keyframes progress-sweep {
+      0% { transform: translateX(-110%); }
+      100% { transform: translateX(320%); }
+    }
+    .status-bar.error { display: block; color: var(--error); padding: 6px 0; text-align: center; }
     .status-bar.success { display: none; }
 
     /* ── Output card ──────────────────────────────────────────────────────── */
@@ -438,6 +448,7 @@
       generation_mode_settings: {},
       engine: "comfyui",
       engine_label: "MiniMax Music 3",
+      memory_mode: "dynamic-vram",
     };
     const generationModes = new Set(["low-vram", "quality"]);
     const writerDetails = {
@@ -461,7 +472,9 @@
         : generationModeLabel(value);
       if (!setting) return title;
       const decode = config.engine === "audiocpp"
-        ? "Q4 memory saver"
+        ? config.memory_mode === "fast"
+          ? "Q4 resident-stage fast path"
+          : "Q4 stage memory saver"
         : setting.tiled_decode
           ? "tiled decode"
           : "standard decode";
@@ -754,7 +767,28 @@
     }
     function setStatus(msg, type = "") {
       statusBar.textContent = msg;
-      statusBar.className = "status-bar" + (type ? ` ${type}` : "");
+      statusBar.className = "status-bar" + (msg ? " active" : "") + (type ? ` ${type}` : "");
+    }
+    function setProgress(message, value, elapsed) {
+      const seconds = Number.isFinite(elapsed) ? `${Math.round(elapsed)}s` : "";
+      statusBar.className = "status-bar active";
+      statusBar.replaceChildren();
+      const line = document.createElement("div");
+      line.className = "status-line";
+      const label = document.createElement("span");
+      label.textContent = message || "Working…";
+      const timer = document.createElement("span");
+      timer.className = "status-elapsed";
+      timer.textContent = seconds;
+      line.append(label, timer);
+      const track = document.createElement("div");
+      track.className = "progress-track";
+      const fill = document.createElement("div");
+      fill.className = "progress-fill";
+      if (Number.isFinite(value)) fill.style.width = `${Math.max(0, Math.min(1, value)) * 100}%`;
+      else fill.classList.add("indeterminate");
+      track.appendChild(fill);
+      statusBar.append(line, track);
     }
 
     async function loadAudio(dataUrl) {
@@ -935,10 +969,11 @@
       ).join("");
       placeholder.innerHTML = `
         <div class="placeholder-title">${esc(desc.slice(0, 80))}</div>
-        <div class="placeholder-sub">Composing locally &amp; generating…</div>
+        <div class="placeholder-sub">Preparing the local writer…</div>
         <div class="fake-waveform">${bars}</div>
       `;
       outputSection.parentNode.insertBefore(placeholder, outputSection);
+      const placeholderSub = placeholder.querySelector(".placeholder-sub");
 
       try {
         const client = await getClient();
@@ -962,6 +997,11 @@
             const raw = msg.data?.[0];
             if (!raw) throw new Error("No data returned");
             const result = JSON.parse(raw);
+            if (result.type === "progress") {
+              setProgress(result.message, result.progress, result.elapsed);
+              placeholderSub.textContent = result.message || "Working…";
+              continue;
+            }
             if (result.generation_mode) {
               runtimeConfig.active_generation_mode = result.generation_mode;
             }
@@ -972,6 +1012,7 @@
               tags: result.tags || "",
             };
             await loadAudio(result.audio);
+            setStatus("");
             // Refresh feed if shared
             if (communityChk.checked) loadFeed();
           }
