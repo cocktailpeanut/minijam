@@ -57,6 +57,8 @@ SYSTEM_PROMPT = f"""You write inputs for MiniMax Music 3, a lyrics-and-descripti
 Reply with exactly one JSON object and nothing else.
 
 Rules:
+- Separate musical direction from lyrical subject. Genre, mood, tempo, instruments, vocal style, and production terms describe how the song sounds, not what it is about.
+- For a request phrased like "a <style> song about <subject>", make the title and lyrics about <subject>. Apply <style> to tags, BPM, vocals, arrangement, and production; use it in the title or lyrics only if the user explicitly makes it part of the subject.
 - `title` must be a short, catchy song title.
 - `tags` must be an array of 3 to 6 concise feed-card style tags.
 - `bpm` must be a plausible tempo integer.
@@ -507,17 +509,7 @@ class LocalComposer:
         if key == "auto":
             ram_gb = _system_memory_gb()
             vram_gb = _gpu_memory_gb()
-            long_vocal_request = (not instrumental) and audio_duration >= 90
-            if _is_apple_mps():
-                # Metal offload keeps short requests fast while unified-memory Macs can
-                # use the stronger composer for long vocal structures.
-                key = "quality" if long_vocal_request else "tiny"
-            elif long_vocal_request:
-                if (ram_gb is not None and ram_gb >= 24) or (vram_gb is not None and vram_gb >= 16):
-                    key = "quality"
-                else:
-                    key = "balanced"
-            elif (vram_gb is not None and vram_gb <= 8) or (ram_gb is not None and ram_gb < 16):
+            if (vram_gb is not None and vram_gb <= 8) or (ram_gb is not None and ram_gb < 16):
                 key = "tiny"
             elif (ram_gb is not None and ram_gb >= 24) or (vram_gb is not None and vram_gb >= 16):
                 key = "quality"

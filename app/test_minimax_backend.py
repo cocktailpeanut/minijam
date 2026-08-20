@@ -10,7 +10,13 @@ import unittest
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-from local_composer import COMPOSER_PROFILES, LocalComposer, _fallback_caption, _normalize_lyrics
+from local_composer import (
+    COMPOSER_PROFILES,
+    SYSTEM_PROMPT,
+    LocalComposer,
+    _fallback_caption,
+    _normalize_lyrics,
+)
 from minimax_backend import MiniMaxBackend
 
 
@@ -189,6 +195,25 @@ class MiniMaxBackendTests(unittest.TestCase):
 
 
 class ComposerContractTests(unittest.TestCase):
+    def test_writer_prompt_separates_style_from_song_subject(self):
+        self.assertIn("musical direction from lyrical subject", SYSTEM_PROMPT)
+        self.assertIn('"a <style> song about <subject>"', SYSTEM_PROMPT)
+        self.assertIn("make the title and lyrics about <subject>", SYSTEM_PROMPT)
+
+    def test_apple_auto_writer_profile_uses_available_unified_memory(self):
+        composer = LocalComposer(HERE / "composer_models")
+        cases = ((12, "tiny"), (20, "balanced"), (64, "quality"))
+        for ram_gb, expected in cases:
+            with (
+                self.subTest(ram_gb=ram_gb),
+                patch("local_composer._is_apple_mps", return_value=True),
+                patch("local_composer._system_memory_gb", return_value=ram_gb),
+                patch("local_composer._gpu_memory_gb", return_value=None),
+                patch.dict(os.environ, {"MINIMAX_COMPOSER_PROFILE": ""}, clear=False),
+            ):
+                selected = composer.resolve_profile("auto", audio_duration=60, instrumental=False)
+            self.assertEqual(selected.key, expected)
+
     def test_apple_silicon_writer_defaults_to_full_metal_offload(self):
         llama = MagicMock()
         composer = LocalComposer(HERE / "composer_models")
