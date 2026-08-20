@@ -1,12 +1,21 @@
 {
-  "title": "AceJAM",
-  "description": "Describe any song in plain English, compose it locally with an embedded Qwen GGUF model, and generate it with ACE-Step v1.5.",
+  "title": "MiniJam",
+  "description": "Describe any song in plain English, compose a structured caption and lyrics locally, and generate it with MiniMax Music 3.",
   "icon": "icon.png",
   "links": [{
     "title": "Model References",
     "links": [{
-      "title": "ACE-Step Model",
-      "value": "https://huggingface.co/ACE-Step/Ace-Step1.5"
+      "title": "MiniMax Music 3",
+      "value": "https://huggingface.co/MiniMaxAI/MiniMax-Music3"
+    }, {
+      "title": "Low-VRAM INT8 Weights",
+      "value": "https://huggingface.co/Comfy-Org/MiniMax-Music-3"
+    }, {
+      "title": "MiniMax Music 3 Jam Reference",
+      "value": "https://huggingface.co/spaces/victor/MiniMax-Music3-Jam"
+    }, {
+      "title": "audio.cpp",
+      "value": "https://github.com/0xShug0/audio.cpp"
     }, {
       "title": "Qwen 4B GGUF",
       "value": "https://huggingface.co/Qwen/Qwen3-4B-GGUF"

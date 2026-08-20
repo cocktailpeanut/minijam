@@ -1,0 +1,21 @@
+{
+  "host": "127.0.0.1",
+  "port": 8080,
+  "backend": "metal",
+  "threads": 4,
+  "lazy_load": false,
+  "busy_timeout_ms": 0,
+  "models": [
+    {
+      "id": "minimax-music3",
+      "family": "minimax_music3",
+      "path": "models/minimax-music3-gguf",
+      "task": "gen",
+      "mode": "offline",
+      "session_options": {
+        "minimax_music3.mem_saver": "true",
+        "minimax_music3.rvq_depth_decoder_gguf": "rvq_depth_decoder_bf16.gguf"
+      }
+    }
+  ]
+}

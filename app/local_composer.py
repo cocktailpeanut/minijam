@@ -26,24 +26,48 @@ SONG_SCHEMA = {
         "bpm": {"type": "integer"},
         "language": {"type": "string"},
         "lyrics": {"type": "string"},
+        "global_metadata": {"type": "string"},
+        "vocal_details": {"type": "string"},
+        "arrangement": {"type": "string"},
     },
-    "required": ["title", "tags", "bpm", "language", "lyrics"],
+    "required": [
+        "title",
+        "tags",
+        "bpm",
+        "language",
+        "lyrics",
+        "global_metadata",
+        "vocal_details",
+        "arrangement",
+    ],
 }
 
-SYSTEM_PROMPT = """You are a professional songwriter helping a local music generator.
+CAPTION_CONTRACT = """The three caption fields must follow the labeled style MiniMax Music 3 was trained on. Be concrete and musical; describe an energy arc and instrument lifecycles, never a static equipment list or decorative adjectives. Never contradict an explicit user constraint. Do not quote or paraphrase lyric lines inside the caption. Aim for roughly 250-400 words across all three fields.
+
+`global_metadata`: one paragraph, in order: "Basic Attributes: bpm is <number>. key is <letter>, and scale is <major|minor>. <Genre / Subgenre>." then "Global Emotional Progression: <how emotion evolves from opening through the final section>." then "Application Scenarios & Imagery: <two or three vivid listening scenarios>." then "Sonics & Production Profile: <soundstage, frequency balance, dynamics, production character>."
+
+`vocal_details`: one paragraph: "Vocal Gender & Timbre: Singer A (<Male|Female>), <timbre and register>." then "Vocal Style: <delivery and how it shifts per section>." then "Harmony/Backing Vocals: <where harmonies or doubles appear>." then "Vocal FX: <restrained reverb, delay and compression>." For an instrumental write "Instrumental, no vocals." and name the lead melodic instrument or texture.
+
+`arrangement`: one paragraph: "Instrument Lifecycle Description (Primary/Secondary Layering): Primary: <core instruments present start to finish and their role>. Secondary: <instruments that enter, exit or intensify, and in which sections>." then "Groove & Foundation Progression: <how drums, bass and groove develop>." then "Embellishments, Textures & Spatial FX: <fills, transitions, stereo and space treatment>." Align the changes with the lyric section tags."""
+
+LYRICS_RULES = """Use only these section tags, alone on their own line: [intro] [verse] [pre-chorus] [chorus] [post-chorus] [bridge] [instrumental] [solo] [outro]. Never put words on the same line as a tag. Roughly 12-16 sung words per 10 seconds is an upper guide. Musical directions, sound effects and stage directions never belong in the lyrics. For an instrumental, use [instrumental] with no sung words. Write lyrics in the requested language, defaulting to English."""
+
+SYSTEM_PROMPT = f"""You write inputs for MiniMax Music 3, a lyrics-and-description music generation model.
 
 Reply with exactly one JSON object and nothing else.
 
 Rules:
 - `title` must be a short, catchy song title.
-- `tags` must be an array of 3 to 6 concise style tags.
+- `tags` must be an array of 3 to 6 concise feed-card style tags.
 - `bpm` must be a plausible tempo integer.
 - `language` must be one of: en, zh, ja, ko, instrumental, unknown.
-- `lyrics` must be a single string using section markers like [Verse], [Chorus], [Bridge].
-- If the request is instrumental, set `language` to `instrumental` and `lyrics` to `[Instrumental]`.
+- `lyrics` must be a single string. {LYRICS_RULES}
+- If the request is instrumental, set `language` to `instrumental`; vocal_details must never describe a singer.
+- Unless explicitly instrumental, the song has a singer and vocal_details must describe that singer.
 - Match the lyric length and number of sections to the requested duration and section plan.
 - For non-instrumental songs, every section marker must be followed by actual sung lyric lines.
 - Never return empty sections or placeholder markers such as [END], [LYRICS], [LYRITIC], or repeated labels without lyrics.
+- Produce `global_metadata`, `vocal_details`, and `arrangement`. {CAPTION_CONTRACT}
 - Never wrap the JSON in markdown fences.
 """
 
@@ -65,7 +89,7 @@ COMPOSER_PROFILES = {
         filename="Qwen3-0.6B-Q4_0.gguf",
         label="Qwen3 0.6B Q4_0",
         n_ctx=4096,
-        max_tokens=900,
+        max_tokens=1600,
     ),
     "balanced": ComposerProfile(
         key="balanced",
@@ -73,7 +97,7 @@ COMPOSER_PROFILES = {
         filename="Qwen3-1.7B-Q8_0.gguf",
         label="Qwen3 1.7B Q8_0",
         n_ctx=6144,
-        max_tokens=1200,
+        max_tokens=2200,
     ),
     "quality": ComposerProfile(
         key="quality",
@@ -81,7 +105,7 @@ COMPOSER_PROFILES = {
         filename="Qwen3-4B-Q4_K_M.gguf",
         label="Qwen3 4B Q4_K_M",
         n_ctx=8192,
-        max_tokens=1400,
+        max_tokens=2600,
     ),
 }
 
@@ -143,7 +167,9 @@ def _is_apple_mps() -> bool:
 
         return bool(hasattr(torch.backends, "mps") and torch.backends.mps.is_available())
     except Exception:
-        return False
+        # The lightweight app environment intentionally does not install PyTorch.
+        # Apple Silicon still uses the CPU-first composer plus the Metal music engine.
+        return True
 
 
 def _strip_wrappers(raw: str) -> str:
@@ -346,14 +372,48 @@ def _normalize_tags(tags: Any, description: str) -> list[str]:
 
 def _normalize_lyrics(lyrics: Any, instrumental: bool) -> str:
     if instrumental:
-        return "[Instrumental]"
+        return "[instrumental]"
 
-    text = str(lyrics or "").replace("\r\n", "\n").strip()
+    text = str(lyrics or "").replace("\r", "").replace("\\n", "\n").strip()
     if not text:
         return ""
     if "[" not in text:
-        text = f"[Verse]\n{text}"
-    return text
+        text = f"[verse]\n{text}"
+
+    aliases = {
+        "hook": "chorus",
+        "refrain": "chorus",
+        "interlude": "instrumental",
+        "break": "instrumental",
+        "ending": "outro",
+    }
+    allowed = {
+        "intro",
+        "verse",
+        "pre-chorus",
+        "chorus",
+        "post-chorus",
+        "bridge",
+        "instrumental",
+        "solo",
+        "outro",
+    }
+    out: list[str] = []
+    for line in text.splitlines():
+        match = re.match(r"^\s*\[([^\]]+)\]\s*(.*)$", line)
+        if not match:
+            out.append(line.rstrip())
+            continue
+        raw_tag = re.sub(r"\s+\d+\s*$", "", match.group(1).strip().lower())
+        tag = aliases.get(raw_tag, raw_tag)
+        remainder = match.group(2).strip()
+        if tag in allowed:
+            out.append(f"[{tag}]")
+            if remainder:
+                out.append(remainder)
+        elif remainder:
+            out.append(remainder)
+    return re.sub(r"\n{3,}", "\n\n", "\n".join(out)).strip()
 
 
 def _has_meaningful_lyrics(text: str, audio_duration: float) -> bool:
@@ -379,7 +439,7 @@ def _has_meaningful_lyrics(text: str, audio_duration: float) -> bool:
 
 def _duration_prompt(audio_duration: float, instrumental: bool) -> str:
     if instrumental:
-        return "Keep the output instrumental."
+        return "Keep the output instrumental. Use [instrumental] section tags with no sung words."
     plan = _lyric_plan(audio_duration)
     return (
         f"Use this section plan: {plan['structure']}.\n"
@@ -387,6 +447,40 @@ def _duration_prompt(audio_duration: float, instrumental: bool) -> str:
         "Every section must include actual sung lines, not empty labels.\n"
         "Do not emit placeholder tokens such as [END], [LYRICS], or [Instrumental]."
     )
+
+
+def _fallback_caption(
+    description: str,
+    tags: list[str],
+    bpm: int,
+    instrumental: bool,
+) -> tuple[str, str, str]:
+    genre = tags[0].title() if tags else "Contemporary Pop"
+    mood = tags[1] if len(tags) > 1 else "emotionally direct"
+    global_metadata = (
+        f"Basic Attributes: bpm is {bpm}. key is C, and scale is major. {genre}. "
+        f"Global Emotional Progression: The opening establishes a {mood} atmosphere, the middle sections "
+        "broaden in intensity, and the final section resolves with the strongest emotional statement. "
+        f"Application Scenarios & Imagery: {description.strip()[:220] or 'A vivid late-night listening scene and an intimate live performance'}. "
+        "Sonics & Production Profile: A balanced modern mix with clear transients, controlled low end, "
+        "natural dynamics, and a wide but focused stereo image."
+    )
+    vocal_details = (
+        "Instrumental, no vocals. The lead melodic role moves between the primary instrument and a supporting texture."
+        if instrumental
+        else "Vocal Gender & Timbre: Singer A (Female), a clear mid-register voice with a warm edge. "
+        "Vocal Style: Intimate and measured in the verses, opening into a stronger sustained chorus delivery. "
+        "Harmony/Backing Vocals: Restrained doubles enter in the choruses and widen in the final refrain. "
+        "Vocal FX: Short plate reverb, subtle delay, and light transparent compression."
+    )
+    arrangement = (
+        "Instrument Lifecycle Description (Primary/Secondary Layering): Primary: drums, bass, and the central harmonic instrument "
+        "establish the song and remain coherent throughout. Secondary: supporting textures enter after the opening, intensify through "
+        "the choruses, thin out before the bridge, and return for the final section. Groove & Foundation Progression: the rhythm starts "
+        "restrained, adds weight and movement section by section, and reaches its fullest form near the ending. Embellishments, Textures "
+        "& Spatial FX: concise fills connect sections while filtered transitions, stereo ambience, and a controlled reverb tail create depth."
+    )
+    return global_metadata, vocal_details, arrangement
 
 
 def _log_block(label: str, text: str) -> None:
@@ -407,7 +501,7 @@ class LocalComposer:
         audio_duration: float = 60.0,
         instrumental: bool = False,
     ) -> ComposerProfile:
-        override = os.environ.get("ACE_STEP_COMPOSER_PROFILE", "").strip().lower()
+        override = os.environ.get("MINIMAX_COMPOSER_PROFILE", "").strip().lower()
         key = (override or requested or "auto").strip().lower()
 
         if key == "auto":
@@ -518,7 +612,23 @@ class LocalComposer:
         if not instrumental and (language == "instrumental" or not _has_meaningful_lyrics(lyrics, audio_duration)):
             language = "en"
             lyrics = _fallback_lyrics(title, description, audio_duration, instrumental=False)
+            lyrics = _normalize_lyrics(lyrics, instrumental=False)
             used_fallback_lyrics = True
+
+        fallback_global, fallback_vocals, fallback_arrangement = _fallback_caption(
+            description,
+            tags,
+            bpm_value,
+            instrumental,
+        )
+        global_metadata = str(payload.get("global_metadata") or fallback_global).strip()
+        vocal_details = str(payload.get("vocal_details") or fallback_vocals).strip()
+        arrangement = str(payload.get("arrangement") or fallback_arrangement).strip()
+        if instrumental and not vocal_details.lower().startswith("instrumental"):
+            vocal_details = fallback_vocals
+        if not instrumental and vocal_details.lower().startswith("instrumental"):
+            vocal_details = fallback_vocals
+        caption = "\n".join((global_metadata, vocal_details, arrangement))
 
         total_elapsed = time.perf_counter() - compose_started_at
         print(
@@ -532,6 +642,7 @@ class LocalComposer:
         print(f"[composer] title={title}")
         print(f"[composer] tags={', '.join(tags)}")
         _log_block("composer.final_lyrics", lyrics)
+        _log_block("composer.minimax_caption", caption)
 
         return {
             "title": title,
@@ -539,6 +650,10 @@ class LocalComposer:
             "bpm": bpm_value,
             "language": language,
             "lyrics": lyrics,
+            "caption": caption,
+            "global_metadata": global_metadata,
+            "vocal_details": vocal_details,
+            "arrangement": arrangement,
             "composer_profile": selected.key,
             "composer_model": selected.label,
         }
@@ -561,7 +676,7 @@ class LocalComposer:
                 "llama-cpp-python is not installed in app/env. Re-run Install or Update."
             ) from exc
 
-        gpu_layers = int(os.environ.get("ACE_STEP_COMPOSER_GPU_LAYERS", "0") or "0")
+        gpu_layers = int(os.environ.get("MINIMAX_COMPOSER_GPU_LAYERS", "0") or "0")
         return Llama(
             model_path=str(model_path),
             n_ctx=profile.n_ctx,
