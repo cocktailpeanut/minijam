@@ -281,6 +281,34 @@ class MiniMaxBackend:
         return phases.get(node_id, ("Generating with ComfyUI…", None))
 
     @staticmethod
+    def _comfy_step_progress(
+        node_id: str,
+        value: float,
+        total: float,
+        tiled: bool,
+    ) -> tuple[str, float | None]:
+        labels = {
+            "4": "Composing structure and performance",
+            "7": "Rendering the audio",
+            "8": "Decoding in low-memory tiles" if tiled else "Decoding the song",
+        }
+        spans = {
+            "4": (0.0, 0.15),
+            "7": (0.15, 0.92),
+            "8": (0.92, 0.99),
+        }
+        ratio = max(0.0, min(1.0, value / total)) if total > 0 else None
+        if node_id not in spans:
+            phase, _ = MiniMaxBackend._comfy_phase(node_id, tiled)
+            return phase, None
+        label = labels[node_id]
+        message = f"{label}… {int(value)} / {int(total)}"
+        if ratio is None:
+            return message, None
+        start, end = spans[node_id]
+        return message, start + (end - start) * ratio
+
+    @staticmethod
     def _audiocpp_progress(stage: str, step: int, total: int) -> tuple[str, float | None]:
         labels = {
             "ar": f"Composing the song… {step} / {total}",
@@ -367,12 +395,72 @@ class MiniMaxBackend:
             deadline = time.monotonic() + 1800
             missing_polls = 0
             current_node = ""
-            while time.monotonic() < deadline:
-                if websocket is not None:
+
+            def handle_websocket_message(message: str) -> None:
+                nonlocal current_node
+                try:
+                    event = json.loads(message)
+                except json.JSONDecodeError:
+                    return
+                data = event.get("data", {}) if isinstance(event, dict) else {}
+                if str(data.get("prompt_id") or "") != prompt_id:
+                    return
+                event_type = event.get("type")
+                if event_type == "execution_start":
+                    progress("Starting the MiniMax workflow…")
+                elif event_type == "executing" and data.get("node") is not None:
+                    current_node = str(data["node"])
+                    phase, phase_progress = self._comfy_phase(current_node, tiled)
+                    progress(phase, phase_progress)
+                elif event_type in {"progress", "progress_state"}:
+                    progress_node = current_node
+                    progress_data = data
+                    if event_type == "progress_state":
+                        nodes = data.get("nodes", {})
+                        if not isinstance(nodes, dict):
+                            return
+                        node_item = None
+                        if current_node in nodes and isinstance(nodes[current_node], dict):
+                            node_item = (current_node, nodes[current_node])
+                        running_item = next(
+                            (
+                                (str(node_id), state)
+                                for node_id, state in nodes.items()
+                                if isinstance(state, dict) and state.get("state") == "running"
+                            ),
+                            None,
+                        )
+                        if running_item is not None:
+                            node_item = running_item
+                        if node_item is None:
+                            return
+                        progress_node, progress_data = node_item
+                        current_node = progress_node
+
+                    if progress_data.get("max"):
+                        value = max(0.0, float(progress_data.get("value", 0)))
+                        total = max(1.0, float(progress_data["max"]))
+                        message_text, ratio = self._comfy_step_progress(
+                            progress_node,
+                            value,
+                            total,
+                            tiled,
+                        )
+                        progress(message_text, ratio)
+                elif event_type == "execution_error":
+                    raise RuntimeError(
+                        str(data.get("exception_message") or data.get("exception_type") or "Generation failed")
+                    )
+
+            def drain_websocket(first_timeout: float = 0.1, max_messages: int = 512) -> None:
+                nonlocal websocket
+                if websocket is None:
+                    return
+                for index in range(max_messages):
                     try:
-                        message = websocket.recv(timeout=0.1)
+                        message = websocket.recv(timeout=first_timeout if index == 0 else 0.001)
                     except TimeoutError:
-                        message = None
+                        break
                     except Exception as exc:
                         print(f"[minimax] ComfyUI progress websocket closed; using polling: {exc}")
                         try:
@@ -380,32 +468,12 @@ class MiniMaxBackend:
                         except Exception:
                             pass
                         websocket = None
-                        message = None
+                        break
                     if isinstance(message, str):
-                        try:
-                            event = json.loads(message)
-                        except json.JSONDecodeError:
-                            event = {}
-                        data = event.get("data", {}) if isinstance(event, dict) else {}
-                        if str(data.get("prompt_id") or "") == prompt_id:
-                            event_type = event.get("type")
-                            if event_type == "execution_start":
-                                progress("Starting the MiniMax workflow…")
-                            elif event_type == "executing" and data.get("node") is not None:
-                                current_node = str(data["node"])
-                                phase, phase_progress = self._comfy_phase(current_node, tiled)
-                                progress(phase, phase_progress)
-                            elif event_type == "progress" and data.get("max"):
-                                value = max(0.0, float(data.get("value", 0)))
-                                total = max(1.0, float(data["max"]))
-                                ratio = min(1.0, value / total)
-                                if current_node == "7":
-                                    ratio = 0.15 + 0.77 * ratio
-                                progress(f"Rendering the audio… {int(value)} / {int(total)}", ratio)
-                            elif event_type == "execution_error":
-                                raise RuntimeError(
-                                    str(data.get("exception_message") or data.get("exception_type") or "Generation failed")
-                                )
+                        handle_websocket_message(message)
+
+            while time.monotonic() < deadline:
+                drain_websocket()
 
                 history = self._json("GET", f"/history/{prompt_id}", timeout=30)
                 entry = history.get(prompt_id) if isinstance(history, dict) else None
@@ -414,6 +482,9 @@ class MiniMaxBackend:
                     if status.get("status_str") == "error":
                         raise RuntimeError(self._history_error(entry))
                     if status.get("completed"):
+                        # ComfyUI records completion before this client necessarily
+                        # consumes every progress_state message already in the socket.
+                        drain_websocket(first_timeout=0.05, max_messages=1024)
                         audio = self._first_audio(entry)
                         if not audio:
                             raise RuntimeError("MiniMax completed without audio output")

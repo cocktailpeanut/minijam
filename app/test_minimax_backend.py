@@ -144,15 +144,29 @@ class MiniMaxBackendTests(unittest.TestCase):
         self.assertTrue(backend.session.post.call_args.args[0].endswith("/v1/tasks/run-stream"))
         response.close.assert_called_once_with()
 
-    def test_comfy_websocket_reports_sampler_progress(self):
+    def test_comfy_progress_state_reports_sampler_progress(self):
         backend = self.backend("comfyui")
         websocket = MagicMock()
-        websocket.recv.return_value = json.dumps(
-            {
-                "type": "progress",
-                "data": {"prompt_id": "prompt-1", "value": 5, "max": 20},
-            }
-        )
+        def progress_event(value):
+            return json.dumps(
+                {
+                    "type": "progress_state",
+                    "data": {
+                        "prompt_id": "prompt-1",
+                        "nodes": {
+                            "7": {
+                                "value": value,
+                                "max": 20,
+                                "state": "running",
+                                "node_id": "7",
+                                "prompt_id": "prompt-1",
+                            }
+                        },
+                    },
+                }
+            )
+
+        websocket.recv.side_effect = [progress_event(5), progress_event(6), TimeoutError(), TimeoutError()]
 
         def fake_json(method, path, **_kwargs):
             if method == "POST" and path == "/prompt":
@@ -189,8 +203,8 @@ class MiniMaxBackendTests(unittest.TestCase):
                 lambda message, progress: events.append((message, progress)),
             )
         self.assertEqual(result, b"decoded")
-        self.assertTrue(any("Rendering the audio" in message for message, _ in events))
-        self.assertTrue(any(progress == 0.25 for _, progress in events))
+        self.assertTrue(any("Rendering the audio… 6 / 20" == message for message, _ in events))
+        self.assertTrue(any(progress == 0.381 for _, progress in events))
         websocket.close.assert_called_once_with()
 
 
