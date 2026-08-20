@@ -4,7 +4,6 @@
 /app/.minimax-only
 /app/comfyui/
 /app/models/
-/app/audiocpp_server
 /app/model_cache/
 /app/composer_models/
 /app/data/

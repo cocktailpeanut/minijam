@@ -5,7 +5,7 @@ A fully local Pinokio music app built on MiniMax Music 3. Describe a song in ord
 ## Engines
 
 - Windows and Linux use the native ComfyUI MiniMax implementation with the pruned INT8 text encoder, INT8 DiT, DynamicVRAM, CUDA graphs, prefetch, and automatic tiled decoding.
-- Apple Silicon uses audio.cpp with Q4 language and flow models, AB2 sampling, and stage-by-stage memory saving.
+- Apple Silicon uses audio.cpp with Q4 language and flow models, AB2 sampling, and stage-by-stage memory saving. Its arm64 server executable and license are bundled with MiniJam; Install verifies the pinned SHA-256 before enabling it.
 
 The app keeps the useful local workflow—browser player, downloads, MP4 sharing, and a local song feed—without a cover-art model or unrelated diffusion dependencies.
 

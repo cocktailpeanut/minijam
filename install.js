@@ -107,14 +107,6 @@ module.exports = {
     },
     {
       when: "{{platform === 'darwin' && arch === 'arm64'}}",
-      method: "fs.download",
-      params: {
-        url: "https://raw.githubusercontent.com/cocktailpeanut/minimax-music/main/app/audiocpp_server",
-        path: "app/audiocpp_server"
-      }
-    },
-    {
-      when: "{{platform === 'darwin' && arch === 'arm64'}}",
       method: "shell.run",
       params: {
         path: "app",

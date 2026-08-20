@@ -8,13 +8,6 @@ module.exports = {
       }
     },
     {
-      when: "{{exists('app/audiocpp_server')}}",
-      method: "fs.rm",
-      params: {
-        path: "app/audiocpp_server"
-      }
-    },
-    {
       when: "{{exists('app/models')}}",
       method: "fs.rm",
       params: {
