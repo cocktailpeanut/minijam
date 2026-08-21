@@ -42,6 +42,14 @@ The local writer follows the `victor/MiniMax-Music3-Jam` behavior:
 
 The ZeroGPU allocation, RTX Pro 6000 AoTI kernels, hosted writer, Gradio Space queue, and GPU cover-art model are intentionally not included because they are not portable to low-VRAM local machines.
 
+## Credits
+
+- [MiniMax Music 3](https://github.com/MiniMax-AI/MiniMax-Music3) provides the music model.
+- [ComfyUI](https://github.com/Comfy-Org/ComfyUI) provides the Windows/Linux inference runtime used by MiniJam.
+- MiniJam's native audio.cpp path is derived from [fspecii's audio.cpp low-end GPU fork](https://github.com/fspecii/audio.cpp-lowend-gpu), whose low-memory and performance work made MiniMax Music 3 substantially more practical on constrained hardware.
+- That fork is based on the original [audio.cpp](https://github.com/0xShug0/audio.cpp) project by 0xShug0 / ShugoAI LLC. Both audio.cpp projects are licensed under Apache 2.0; the license bundled beside MiniJam's native server is in `app/audiocpp-LICENSE.txt`.
+- [llama-cpp-python](https://github.com/abetlen/llama-cpp-python) provides the local writer runtime.
+
 ## Storage
 
 - `app/comfyui/`: pinned ComfyUI MiniMax runtime on Windows/Linux.
