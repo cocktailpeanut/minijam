@@ -207,6 +207,23 @@ def _guess_title(description: str) -> str:
 
 
 def _lyric_plan(audio_duration: float) -> dict[str, Any]:
+    if audio_duration >= 285:
+        return {
+            "structure": (
+                "[Verse], [Chorus], [Verse], [Chorus], [Bridge], [Chorus], "
+                "[Verse], [Chorus], [Bridge], [Chorus], [Verse], [Chorus], "
+                "[Bridge], [Chorus], [Verse], [Chorus], [Bridge], [Chorus], [Outro]"
+            ),
+            "line_range": "34 to 44",
+            "word_range": "360 to 480",
+            "min_lines": 34,
+            "min_words": 360,
+            "sections": (
+                "Verse", "Chorus", "Verse", "Chorus", "Bridge", "Chorus",
+                "Verse", "Chorus", "Bridge", "Chorus", "Verse", "Chorus",
+                "Bridge", "Chorus", "Verse", "Chorus", "Bridge", "Chorus", "Outro",
+            ),
+        }
     if audio_duration >= 240:
         return {
             "structure": (
@@ -471,9 +488,11 @@ def _duration_prompt(audio_duration: float, instrumental: bool) -> str:
     if instrumental:
         return "Keep the output instrumental. Use [instrumental] section tags with no sung words."
     plan = _lyric_plan(audio_duration)
+    word_target = f"Write {plan['word_range']} sung words total.\n" if plan.get("word_range") else ""
     return (
         f"Use this section plan: {plan['structure']}.\n"
         f"Write {plan['line_range']} non-empty lyric lines total.\n"
+        f"{word_target}"
         "Every section must include actual sung lines, not empty labels.\n"
         "Do not emit placeholder tokens such as [END], [LYRICS], or [Instrumental]."
     )

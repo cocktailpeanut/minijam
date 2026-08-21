@@ -300,6 +300,7 @@ class ComposerContractTests(unittest.TestCase):
         five_minute_plan = _lyric_plan(300)
         self.assertGreater(five_minute_plan["min_lines"], two_minute_plan["min_lines"])
         self.assertGreater(five_minute_plan["min_words"], two_minute_plan["min_words"])
+        self.assertEqual(five_minute_plan["min_words"], 360)
 
         lyrics = _fallback_lyrics(
             "Long Way Home",
