@@ -1,6 +1,9 @@
 # MiniJam
 
-A fully local Pinokio music app built on MiniMax Music 3. Describe a song in ordinary language; a local Qwen GGUF writer creates its title, tags, lyrics, and MiniMax production caption, then the low-memory music backend renders the track.
+A localhost port of https://huggingface.co/spaces/victor/MiniMax-Music3-Jam -- designed to run locally, on ALL OS (Mac, Linux, Windows)
+
+Built on MiniMax Music 3. Describe a song in ordinary language; a local Qwen GGUF writer creates its title, tags, lyrics, and MiniMax production caption, then the low-memory music backend renders the track.
+
 
 ## Engines
 
