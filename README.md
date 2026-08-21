@@ -27,7 +27,7 @@ The app keeps the useful local workflow—browser player, downloads, MP4 sharing
 
 1. Click **Install**. The launcher installs the appropriate engine and downloads the MiniMax weights.
 2. Click **Start**, then open **MiniJam**.
-3. Describe a song, select its duration and optional instrumental mode, then click **Generate**.
+3. Describe a song, select a duration from 30 seconds through 5 minutes and optional instrumental mode, then click **Generate**.
 4. Leave **Music** on **Auto** unless you need a specific tradeoff:
    - **Low VRAM** uses 20 flow steps and tiled decoding on ComfyUI; audio.cpp keeps its 15-step Q4 path.
    - **Quality** uses the Space-compatible 30 steps on ComfyUI and 20 steps on audio.cpp.
@@ -37,6 +37,8 @@ The Music dropdown changes generation steps and ComfyUI decoding on each request
 The local writer closes immediately after composing the song. It defaults to full Metal offload on Apple Silicon and CPU on Windows/Linux so it does not compete with the ComfyUI music model for VRAM. On systems below 40 GB RAM, the music engine is unloaded before the writer runs so both large models are not resident simultaneously.
 
 The browser reports Writer preparation with an elapsed timer, real ComfyUI sampling progress on Windows/Linux, and audio.cpp AR/flow/vocoder progress on macOS. A first-time Metal kernel compilation has no granular events in audio.cpp, so that phase is shown honestly as indeterminate preparation until the first generation event arrives.
+
+Five minutes is the model's supported maximum and is treated as an upper bound: MiniMax may end a complete song earlier. Long songs take substantially longer to render, especially on low-memory hardware, and automatically use tiled decoding on ComfyUI.
 
 ## Space behavior retained
 
@@ -80,11 +82,13 @@ The app exposes four named Gradio APIs:
 
 - `/create`
   - Parameters: `description`, `audio_duration`, `seed`, `community`, `composer_profile`, `generation_mode`, `instrumental`
+  - `audio_duration` accepts 10 to 300 seconds and is an upper bound; the model may finish earlier.
   - Streams JSON progress messages containing `type`, `stage`, `message`, `progress`, and `elapsed`, followed by the final JSON song.
   - The final song contains `audio`, `title`, `tags`, `lyrics`, `caption`, `bpm`, `language`, `composer_profile`, `composer_model`, `generation_mode`, `seed`, `duration`, `steps`, `tiled_decode`, and optionally `community_url`.
   - `predict()` clients still receive the final song only; use a submitted job or the curl event stream to consume intermediate progress.
 - `/generate`
   - Parameters: `prompt`, `lyrics`, `audio_duration`, `steps`, `seed`, `generation_mode`
+  - `audio_duration` accepts 10 to 300 seconds and is an upper bound; the model may finish earlier.
   - `prompt` is an explicit MiniMax production caption.
   - Returns a `data:audio/wav;base64,...` string.
 - `/community`

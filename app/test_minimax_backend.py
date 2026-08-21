@@ -15,9 +15,16 @@ from local_composer import (
     SYSTEM_PROMPT,
     LocalComposer,
     _fallback_caption,
+    _fallback_lyrics,
+    _has_meaningful_lyrics,
+    _lyric_plan,
     _normalize_lyrics,
 )
-from minimax_backend import MiniMaxBackend
+from minimax_backend import (
+    GENERATION_TIMEOUT_SECONDS,
+    MAX_DURATION_SECONDS,
+    MiniMaxBackend,
+)
 
 
 HERE = Path(__file__).resolve().parent
@@ -65,6 +72,15 @@ class ApiContractTests(unittest.TestCase):
         self.assertIn("setProgress(result.message, result.progress, result.elapsed)", frontend)
         self.assertIn('fill.classList.add("indeterminate")', frontend)
 
+    def test_ui_and_api_expose_five_minute_generation(self):
+        frontend = (HERE / "index.html").read_text(encoding="utf-8")
+        app_source = (HERE / "app.py").read_text(encoding="utf-8")
+        self.assertIn('<option value="300">5 min</option>', frontend)
+        self.assertIn('"max_duration": MAX_DURATION_SECONDS', app_source)
+        self.assertIn("time_limit=GENERATION_TIMEOUT_SECONDS", app_source)
+        self.assertEqual(MAX_DURATION_SECONDS, 300.0)
+        self.assertEqual(GENERATION_TIMEOUT_SECONDS, 3600)
+
 
 class MiniMaxBackendTests(unittest.TestCase):
     def backend(self, engine: str = "comfyui") -> MiniMaxBackend:
@@ -96,6 +112,18 @@ class MiniMaxBackendTests(unittest.TestCase):
         self.assertEqual(workflow["7"]["inputs"]["steps"], 30)
         self.assertEqual(workflow["8"]["class_type"], "VAEDecodeAudioTiled")
         json.dumps(workflow)
+
+    def test_generation_clamps_to_five_minutes(self):
+        backend = self.backend()
+        backend.engine_info = lambda **_: {"total_vram": 20 * 1024 ** 3}
+        fake_wav = b"RIFF" + (b"\x00" * 4) + b"WAVE" + (b"\x00" * 33)
+        backend._generate_comfy = MagicMock(return_value=fake_wav)
+
+        result = backend.generate("caption", "[instrumental]", 999, 7, mode="quality")
+
+        self.assertEqual(backend._generate_comfy.call_args.args[2], MAX_DURATION_SECONDS)
+        self.assertTrue(backend._generate_comfy.call_args.args[5])
+        self.assertEqual(result.duration, MAX_DURATION_SECONDS)
 
     def test_audiocpp_defaults_to_fast_q4_steps(self):
         backend = self.backend("audiocpp")
@@ -266,6 +294,20 @@ class ComposerContractTests(unittest.TestCase):
         self.assertIn("Basic Attributes:", global_metadata)
         self.assertIn("Vocal Gender & Timbre:", vocals)
         self.assertIn("Instrument Lifecycle Description", arrangement)
+
+    def test_five_minute_lyric_plan_scales_beyond_two_minutes(self):
+        two_minute_plan = _lyric_plan(120)
+        five_minute_plan = _lyric_plan(300)
+        self.assertGreater(five_minute_plan["min_lines"], two_minute_plan["min_lines"])
+        self.assertGreater(five_minute_plan["min_words"], two_minute_plan["min_words"])
+
+        lyrics = _fallback_lyrics(
+            "Long Way Home",
+            "cinematic synth-pop about finding the road home",
+            300,
+            instrumental=False,
+        )
+        self.assertTrue(_has_meaningful_lyrics(lyrics, 300))
 
 
 if __name__ == "__main__":

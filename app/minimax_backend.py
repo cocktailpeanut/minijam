@@ -21,6 +21,8 @@ import soundfile as sf
 
 
 MAX_SEED = 2_147_483_647
+MAX_DURATION_SECONDS = 300.0
+GENERATION_TIMEOUT_SECONDS = 3600
 DEFAULT_STEPS = 30
 LOW_VRAM_STEPS = 20
 GUIDANCE = 1.7
@@ -392,7 +394,7 @@ class MiniMaxBackend:
             if not prompt_id:
                 raise RuntimeError("ComfyUI did not return a prompt ID")
 
-            deadline = time.monotonic() + 1800
+            deadline = time.monotonic() + GENERATION_TIMEOUT_SECONDS
             missing_polls = 0
             current_node = ""
 
@@ -549,7 +551,7 @@ class MiniMaxBackend:
         try:
             response = self.session.post(
                 f"{self.engine_url}/v1/tasks/run-stream",
-                timeout=1800,
+                timeout=GENERATION_TIMEOUT_SECONDS,
                 json=body,
                 stream=True,
             )
@@ -595,7 +597,12 @@ class MiniMaxBackend:
 
         if use_legacy_endpoint:
             print("[minimax] audio.cpp streaming endpoint unavailable; using blocking generation")
-            result = self._json("POST", "/v1/tasks/run", timeout=1800, json=body)
+            result = self._json(
+                "POST",
+                "/v1/tasks/run",
+                timeout=GENERATION_TIMEOUT_SECONDS,
+                json=body,
+            )
         encoded = result.get("audio") if isinstance(result, dict) else None
         if not isinstance(encoded, str):
             raise RuntimeError("audio.cpp returned no MiniMax WAV audio")
@@ -620,7 +627,7 @@ class MiniMaxBackend:
             raise ValueError("A MiniMax music description is required")
         if not lyrics:
             raise ValueError("Lyrics are required; use [instrumental] for an instrumental song")
-        duration = max(10.0, min(180.0, float(duration)))
+        duration = max(10.0, min(MAX_DURATION_SECONDS, float(duration)))
         resolved_seed = _resolve_seed(seed)
         resolved_mode, steps, tiled = self._resolve_mode(mode, duration)
         if steps_override is not None:

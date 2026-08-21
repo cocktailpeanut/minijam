@@ -22,15 +22,17 @@ from fastapi.responses import FileResponse, HTMLResponse
 from gradio import Server
 
 from local_composer import LocalComposer, _normalize_lyrics
-from minimax_backend import MiniMaxBackend
+from minimax_backend import (
+    GENERATION_TIMEOUT_SECONDS,
+    MAX_DURATION_SECONDS,
+    MiniMaxBackend,
+)
 
 
 BASE_DIR = Path(__file__).resolve().parent
 DATA_DIR = BASE_DIR / "data"
 SONGS_DIR = DATA_DIR / "songs"
 COMPOSER_MODELS_DIR = BASE_DIR / "composer_models"
-MAX_DURATION = 180.0
-
 SONGS_DIR.mkdir(parents=True, exist_ok=True)
 COMPOSER_MODELS_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -52,7 +54,7 @@ def _clamp_duration(value: float | int | str | None) -> float:
         duration = float(value)
     except (TypeError, ValueError):
         duration = 60.0
-    return max(10.0, min(MAX_DURATION, duration))
+    return max(10.0, min(MAX_DURATION_SECONDS, duration))
 
 
 def _composer_profile_for_hardware(requested: str, generation_mode: str) -> str:
@@ -137,7 +139,7 @@ _feed_songs = _load_feed_from_disk()
 app = Server(title="MiniJam")
 
 
-@app.api(name="create", concurrency_limit=1, time_limit=1200)
+@app.api(name="create", concurrency_limit=1, time_limit=GENERATION_TIMEOUT_SECONDS)
 def create(
     description: str,
     audio_duration: float = 60.0,
@@ -280,7 +282,7 @@ def create(
         gc.collect()
 
 
-@app.api(name="generate", concurrency_limit=1, time_limit=1200)
+@app.api(name="generate", concurrency_limit=1, time_limit=GENERATION_TIMEOUT_SECONDS)
 def generate(
     prompt: str,
     lyrics: str,
@@ -333,7 +335,7 @@ def config(audio_duration: float = 60.0) -> str:
             "engine": info.get("engine"),
             "engine_label": info.get("label"),
             "memory_mode": info.get("memory_mode"),
-            "max_duration": MAX_DURATION,
+            "max_duration": MAX_DURATION_SECONDS,
         }
     )
 

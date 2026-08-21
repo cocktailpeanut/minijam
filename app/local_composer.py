@@ -207,6 +207,34 @@ def _guess_title(description: str) -> str:
 
 
 def _lyric_plan(audio_duration: float) -> dict[str, Any]:
+    if audio_duration >= 240:
+        return {
+            "structure": (
+                "[Verse], [Chorus], [Verse], [Chorus], [Bridge], [Chorus], "
+                "[Verse], [Chorus], [Bridge], [Chorus], [Outro]"
+            ),
+            "line_range": "20 to 32",
+            "min_lines": 20,
+            "min_words": 100,
+            "sections": (
+                "Verse", "Chorus", "Verse", "Chorus", "Bridge", "Chorus",
+                "Verse", "Chorus", "Bridge", "Chorus", "Outro",
+            ),
+        }
+    if audio_duration >= 165:
+        return {
+            "structure": (
+                "[Verse], [Chorus], [Verse], [Chorus], [Bridge], [Chorus], "
+                "[Verse], [Chorus], [Outro]"
+            ),
+            "line_range": "16 to 26",
+            "min_lines": 16,
+            "min_words": 80,
+            "sections": (
+                "Verse", "Chorus", "Verse", "Chorus", "Bridge", "Chorus",
+                "Verse", "Chorus", "Outro",
+            ),
+        }
     if audio_duration >= 105:
         return {
             "structure": "[Verse], [Chorus], [Verse], [Chorus], [Bridge], [Chorus], optional [Outro]",
