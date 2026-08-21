@@ -42,6 +42,10 @@ class LauncherContractTests(unittest.TestCase):
         self.assertIn('event: "/(http:\\\/\\\\/[0-9.:]+)/"', start)
         self.assertIn('url: "{{input.event[1]}}"', start)
 
+    def test_app_installs_comfy_progress_transport(self):
+        requirements = (ROOT / "app" / "requirements.txt").read_text(encoding="utf-8")
+        self.assertRegex(requirements, r"(?m)^websockets(?:[<>=].*)?$")
+
 
 if __name__ == "__main__":
     unittest.main()

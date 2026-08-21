@@ -3,3 +3,4 @@ huggingface_hub>=0.20.0
 numpy>=1.26.0,<3
 requests>=2.32.0
 soundfile>=0.13.1
+websockets>=15.0,<17
