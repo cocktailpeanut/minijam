@@ -4,21 +4,31 @@ import ast
 import base64
 import json
 import os
-import sys
-import types
+import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 from local_composer import (
+    BLUEPRINT_SCHEMA,
     COMPOSER_PROFILES,
+    SONG_SCHEMA,
     SYSTEM_PROMPT,
     LocalComposer,
+    _assemble_blueprint_lyrics,
+    _default_blueprint,
     _fallback_caption,
     _fallback_lyrics,
     _has_meaningful_lyrics,
     _lyric_plan,
+    _lyrics_repair_schema,
+    _normalize_blueprint,
     _normalize_lyrics,
+    _populated_section_count,
+    _requested_bpm,
+    _section_line_counts,
+    _section_sequence,
+    _target_bars,
 )
 from minimax_backend import (
     GENERATION_TIMEOUT_SECONDS,
@@ -28,6 +38,14 @@ from minimax_backend import (
 
 
 HERE = Path(__file__).resolve().parent
+
+
+def _lyrics_for_blueprint(blueprint: dict, line: str = "one two three four five six seven eight") -> str:
+    chunks = []
+    for section in blueprint["sections"]:
+        chunks.append(f"[{section['tag']}]")
+        chunks.extend([line] * section["target_lyric_lines"])
+    return "\n".join(chunks)
 
 
 class ApiContractTests(unittest.TestCase):
@@ -58,9 +76,10 @@ class ApiContractTests(unittest.TestCase):
 
     def test_frontend_names_actual_writer_models_and_music_settings(self):
         frontend = (HERE / "index.html").read_text(encoding="utf-8")
-        self.assertIn("Writer: Qwen3 0.6B Q4_0 (Tiny)", frontend)
-        self.assertIn("Writer: Qwen3 1.7B Q8_0 (Balanced)", frontend)
-        self.assertIn("Writer: Qwen3 4B Q4_K_M (Quality)", frontend)
+        self.assertIn("Writer: Qwen 3.5 0.8B Q4_K_M (Tiny)", frontend)
+        self.assertIn("Writer: Qwen 3.5 2B Q4_K_M (Balanced)", frontend)
+        self.assertIn("Writer: Qwen 3.5 9B Q4_K_M (Quality)", frontend)
+        self.assertIn("Auto (Qwen 3.5 9B for songs over 3 minutes)", frontend)
         self.assertIn('<span class="setting-label">Writer</span>', frontend)
         self.assertIn('<span class="setting-label">Music</span>', frontend)
         self.assertIn("setting.steps", frontend)
@@ -256,33 +275,50 @@ class ComposerContractTests(unittest.TestCase):
                 selected = composer.resolve_profile("auto", audio_duration=60, instrumental=False)
             self.assertEqual(selected.key, expected)
 
-    def test_apple_silicon_writer_defaults_to_full_metal_offload(self):
-        llama = MagicMock()
-        composer = LocalComposer(HERE / "composer_models")
-        fake_module = types.SimpleNamespace(Llama=llama)
-        with (
-            patch("local_composer._is_apple_mps", return_value=True),
-            patch.dict(os.environ, {"MINIMAX_COMPOSER_GPU_LAYERS": ""}, clear=False),
-            patch.dict(sys.modules, {"llama_cpp": fake_module}),
-        ):
-            composer._load_llm(COMPOSER_PROFILES["tiny"], HERE / "unused.gguf")
-        self.assertEqual(llama.call_args.kwargs["n_gpu_layers"], -1)
+    def test_all_writer_options_use_qwen_35(self):
+        self.assertEqual(
+            [COMPOSER_PROFILES[key].label for key in ("tiny", "balanced", "quality")],
+            [
+                "Qwen 3.5 0.8B Q4_K_M",
+                "Qwen 3.5 2B Q4_K_M",
+                "Qwen 3.5 9B Q4_K_M",
+            ],
+        )
 
-    def test_writer_gpu_layer_override_can_force_cpu(self):
-        llama = MagicMock()
+    def test_long_song_auto_uses_quality_but_explicit_option_wins(self):
         composer = LocalComposer(HERE / "composer_models")
-        fake_module = types.SimpleNamespace(Llama=llama)
-        with (
-            patch("local_composer._is_apple_mps", return_value=True),
-            patch.dict(os.environ, {"MINIMAX_COMPOSER_GPU_LAYERS": "0"}, clear=False),
-            patch.dict(sys.modules, {"llama_cpp": fake_module}),
-        ):
-            composer._load_llm(COMPOSER_PROFILES["tiny"], HERE / "unused.gguf")
-        self.assertEqual(llama.call_args.kwargs["n_gpu_layers"], 0)
+        with patch.dict(os.environ, {"MINIMAX_COMPOSER_PROFILE": ""}, clear=False):
+            self.assertEqual(composer.resolve_profile("auto", audio_duration=300).key, "quality")
+            self.assertEqual(composer.resolve_profile("tiny", audio_duration=300).key, "tiny")
+            self.assertEqual(composer.resolve_profile("balanced", audio_duration=300).key, "balanced")
+
+    def test_python_writer_uses_schema_constrained_completion(self):
+        llm = MagicMock()
+        llm.create_chat_completion.return_value = {
+            "choices": [{"message": {"content": "{}"}}]
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            composer = LocalComposer(directory)
+            result = composer._run_completion(
+                llm,
+                COMPOSER_PROFILES["quality"],
+                "prompt",
+            )
+        self.assertEqual(result, "{}")
+        kwargs = llm.create_chat_completion.call_args.kwargs
+        self.assertEqual(kwargs["response_format"]["schema"], SONG_SCHEMA)
+        self.assertEqual(kwargs["max_tokens"], COMPOSER_PROFILES["quality"].max_tokens)
 
     def test_section_tags_are_normalized_for_minimax(self):
         lyrics = _normalize_lyrics("[Verse 1] first line\n[Hook] chorus line", instrumental=False)
         self.assertEqual(lyrics, "[verse]\nfirst line\n[chorus]\nchorus line")
+
+    def test_instrumental_and_solo_production_directions_are_removed_from_lyrics(self):
+        lyrics = _normalize_lyrics(
+            "[verse]\nSing this\n[instrumental]\nGuitar swells here\n[solo]\nPlay a violin solo\n[outro]\nGoodnight",
+            instrumental=False,
+        )
+        self.assertEqual(lyrics, "[verse]\nSing this\n[instrumental]\n[solo]\n[outro]\nGoodnight")
 
     def test_fallback_caption_has_three_minimax_parts(self):
         global_metadata, vocals, arrangement = _fallback_caption(
@@ -295,20 +331,129 @@ class ComposerContractTests(unittest.TestCase):
         self.assertIn("Vocal Gender & Timbre:", vocals)
         self.assertIn("Instrument Lifecycle Description", arrangement)
 
-    def test_five_minute_lyric_plan_scales_beyond_two_minutes(self):
-        two_minute_plan = _lyric_plan(120)
-        five_minute_plan = _lyric_plan(300)
-        self.assertGreater(five_minute_plan["min_lines"], two_minute_plan["min_lines"])
-        self.assertGreater(five_minute_plan["min_words"], two_minute_plan["min_words"])
-        self.assertEqual(five_minute_plan["min_words"], 360)
-
-        lyrics = _fallback_lyrics(
-            "Long Way Home",
-            "cinematic synth-pop about finding the road home",
-            300,
-            instrumental=False,
+    def test_short_lyric_plans_follow_the_original_space_structures(self):
+        self.assertEqual(_lyric_plan(30)["sections"], ("Verse", "Chorus"))
+        self.assertEqual(
+            _lyric_plan(60)["sections"],
+            ("Verse", "Pre-Chorus", "Chorus", "Verse", "Chorus"),
         )
-        self.assertTrue(_has_meaningful_lyrics(lyrics, 300))
+        self.assertEqual(
+            _lyric_plan(120)["sections"],
+            ("Verse", "Pre-Chorus", "Chorus", "Verse", "Chorus", "Bridge", "Chorus", "Outro"),
+        )
+
+    def test_five_minute_plan_uses_blueprint_sections(self):
+        five_minute_plan = _lyric_plan(300)
+        self.assertEqual(five_minute_plan["target_vocal_sections"], 12)
+        self.assertIn("Instrumental", five_minute_plan["sections"])
+        self.assertEqual(five_minute_plan["sections"][-1], "Outro")
+
+    def test_five_minute_plan_rejects_an_overstuffed_lyric_draft(self):
+        line = "one two three four five six seven eight nine ten"
+        lyrics = "[verse]\n" + "\n".join([line] * 51) + "\n[outro]\nThe final light goes home"
+        self.assertFalse(_has_meaningful_lyrics(lyrics, 300))
+
+    def test_blueprint_bar_math_and_validation_fill_the_requested_timeline(self):
+        blueprint = _default_blueprint(300, bpm=96)
+        normalized = _normalize_blueprint(blueprint, 300)
+        total_bars = sum(section["approximate_bars"] for section in normalized["sections"])
+        self.assertEqual(total_bars, round(_target_bars(300, 96, "4/4")))
+        self.assertEqual(normalized["sections"][-1]["tag"], "outro")
+
+    def test_explicit_bpm_is_preserved_for_blueprint_fallback(self):
+        self.assertEqual(_requested_bpm("128 BPM Japanese city pop"), 128)
+        self.assertIsNone(_requested_bpm("Japanese city pop"))
+
+    def test_blueprint_validation_scales_qwen_proportions_to_exact_bar_math(self):
+        blueprint = _default_blueprint(300, bpm=96)
+        for section in blueprint["sections"]:
+            section["approximate_bars"] = max(2, section["approximate_bars"] // 2)
+        normalized = _normalize_blueprint(blueprint, 300)
+        self.assertEqual(
+            sum(section["approximate_bars"] for section in normalized["sections"]),
+            120,
+        )
+
+    def test_five_minute_blueprint_enforces_its_per_section_line_targets(self):
+        blueprint = _default_blueprint(300, bpm=96)
+        lyrics = _lyrics_for_blueprint(blueprint)
+        self.assertEqual(
+            _section_line_counts(lyrics),
+            tuple(section["target_lyric_lines"] for section in blueprint["sections"]),
+        )
+        self.assertTrue(_has_meaningful_lyrics(lyrics, 300, blueprint, "en"))
+
+    def test_lyrics_repair_schema_and_assembly_enforce_each_planned_section(self):
+        blueprint = _default_blueprint(300, bpm=96)
+        schema = _lyrics_repair_schema(blueprint)
+        payload = {}
+        for index, section in enumerate(blueprint["sections"], 1):
+            target = section["target_lyric_lines"]
+            if target <= 0:
+                continue
+            key = f"section_{index:02d}"
+            self.assertEqual(schema["properties"][key]["minItems"], target)
+            self.assertEqual(schema["properties"][key]["maxItems"], target)
+            payload[key] = [f"lyric line {line}" for line in range(target)]
+        lyrics = _assemble_blueprint_lyrics(payload, blueprint)
+        self.assertTrue(_has_meaningful_lyrics(lyrics, 300, blueprint, "en"))
+
+    def test_five_minute_blueprint_rejects_underfilled_sections_in_any_language(self):
+        blueprint = _default_blueprint(300, bpm=128)
+        chunks = []
+        for section in blueprint["sections"]:
+            chunks.append(f"[{section['tag']}]")
+            if section["target_lyric_lines"]:
+                chunks.extend(["画面の向こうへ進む"] * 2)
+        lyrics = "\n".join(chunks)
+        self.assertFalse(_has_meaningful_lyrics(lyrics, 300, blueprint, "ja"))
+
+    def test_blueprint_lyrics_must_follow_the_exact_section_timeline(self):
+        blueprint = _default_blueprint(300, bpm=96)
+        lyrics = _lyrics_for_blueprint(blueprint)
+        expected = tuple(section["tag"] for section in blueprint["sections"])
+        self.assertEqual(_section_sequence(lyrics), expected)
+        self.assertTrue(_has_meaningful_lyrics(lyrics, 300, blueprint, "en"))
+        self.assertFalse(_has_meaningful_lyrics(lyrics.replace("[bridge]", "[verse]", 1), 300, blueprint, "en"))
+
+    def test_blueprint_allows_a_section_whose_vocal_plan_is_wordless(self):
+        blueprint = _default_blueprint(300, bpm=96)
+        blueprint["sections"][0]["vocal_plan"] = "wordless opening with no lead vocal"
+        blueprint["sections"][0]["target_lyric_lines"] = 0
+        lyrics = _lyrics_for_blueprint(blueprint)
+        self.assertTrue(_has_meaningful_lyrics(lyrics, 300, blueprint, "en"))
+
+    def test_long_song_composition_runs_blueprint_then_song_pass(self):
+        blueprint = _default_blueprint(300, bpm=96)
+        song = {
+            "title": "Night Signal",
+            "tags": ["synth-pop", "nocturnal", "melodic"],
+            "bpm": 96,
+            "language": "en",
+            "lyrics": _lyrics_for_blueprint(blueprint),
+            "global_metadata": "Basic Attributes: bpm is 96. key is C, and scale is minor. Synth-pop.",
+            "vocal_details": "Vocal Gender & Timbre: Singer A (Female), warm alto.",
+            "arrangement": "Instrument Lifecycle Description (Primary/Secondary Layering): Primary: synths.",
+        }
+        composer = LocalComposer(HERE / "composer_models")
+        llm = MagicMock()
+        with (
+            patch.object(composer, "_ensure_model", return_value=HERE / "model.gguf"),
+            patch.object(composer, "_load_llm", return_value=llm),
+            patch.object(
+                composer,
+                "_run_completion",
+                side_effect=[json.dumps(blueprint), json.dumps(song)],
+            ) as completion,
+        ):
+            result = composer.compose("synth pop about finding home", 300, profile="quality")
+
+        self.assertEqual(completion.call_count, 2)
+        llm.close.assert_called_once()
+        self.assertIs(completion.call_args_list[0].kwargs["schema"], BLUEPRINT_SCHEMA)
+        self.assertEqual(completion.call_args_list[1].kwargs["max_tokens"], 2600)
+        self.assertEqual(result["bpm"], 96)
+        self.assertIn("Planned Timeline at 96 BPM", result["arrangement"])
 
 
 if __name__ == "__main__":

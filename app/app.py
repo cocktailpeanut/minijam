@@ -57,9 +57,15 @@ def _clamp_duration(value: float | int | str | None) -> float:
     return max(10.0, min(MAX_DURATION_SECONDS, duration))
 
 
-def _composer_profile_for_hardware(requested: str, generation_mode: str) -> str:
+def _composer_profile_for_hardware(
+    requested: str,
+    generation_mode: str,
+    audio_duration: float = 60.0,
+) -> str:
     if (requested or "auto").strip().lower() != "auto":
         return requested
+    if audio_duration > 180:
+        return "quality"
     if (generation_mode or "auto").strip().lower() == "low-vram":
         return "tiny"
     try:
@@ -188,7 +194,11 @@ def create(
             # while llama.cpp loads the local song writer.
             report("setup", "Making memory available for the local writer…")
             backend.unload_for_composer(generation_mode)
-            resolved_composer_profile = _composer_profile_for_hardware(composer_profile, generation_mode)
+            resolved_composer_profile = _composer_profile_for_hardware(
+                composer_profile,
+                generation_mode,
+                duration,
+            )
             compose_started = time.perf_counter()
             composed = composer.compose(
                 description=cleaned_description,

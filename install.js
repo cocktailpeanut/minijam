@@ -141,34 +141,25 @@ module.exports = {
       params: {
         venv: "env",
         path: "app",
-        message: [
-          "CMAKE_ARGS=\"-DCMAKE_OSX_ARCHITECTURES=arm64 -DCMAKE_APPLE_SILICON_PROCESSOR=arm64 -DGGML_METAL=on\" uv pip install --upgrade --force-reinstall --no-cache-dir llama-cpp-python==0.3.20",
-          "python -c \"import llama_cpp; print(llama_cpp.__version__)\""
-        ]
+        message: "uv pip install --index-strategy unsafe-best-match --extra-index-url https://abetlen.github.io/llama-cpp-python/whl/metal --upgrade --force-reinstall llama-cpp-python==0.3.35"
       }
     },
     {
-      when: "{{platform === 'win32' && arch === 'x64'}}",
+      when: "{{platform !== 'darwin' && gpu === 'nvidia'}}",
       method: "shell.run",
       params: {
         venv: "env",
         path: "app",
-        message: [
-          "uv pip install --upgrade --force-reinstall \"https://github.com/abetlen/llama-cpp-python/releases/download/v0.3.19/llama_cpp_python-0.3.19-cp310-cp310-win_amd64.whl\"",
-          "python -c \"import llama_cpp; print(llama_cpp.__version__)\""
-        ]
+        message: "uv pip install --index-strategy unsafe-best-match --extra-index-url https://abetlen.github.io/llama-cpp-python/whl/vulkan --upgrade --force-reinstall llama-cpp-python==0.3.35"
       }
     },
     {
-      when: "{{platform !== 'darwin' && platform !== 'win32'}}",
+      when: "{{platform !== 'darwin' && gpu !== 'nvidia'}}",
       method: "shell.run",
       params: {
         venv: "env",
         path: "app",
-        message: [
-          "uv pip install --index-strategy unsafe-best-match --extra-index-url https://abetlen.github.io/llama-cpp-python/whl/cpu --upgrade --force-reinstall --no-cache-dir llama-cpp-python==0.3.20",
-          "python -c \"import llama_cpp; print(llama_cpp.__version__)\""
-        ]
+        message: "uv pip install --index-strategy unsafe-best-match --extra-index-url https://abetlen.github.io/llama-cpp-python/whl/cpu --upgrade --force-reinstall llama-cpp-python==0.3.35"
       }
     },
     {

@@ -365,9 +365,9 @@
             <span class="setting-label">Writer</span>
             <select id="composer-select">
               <option value="auto" selected>Auto</option>
-              <option value="tiny">0.6B · Tiny</option>
-              <option value="balanced">1.7B · Balanced</option>
-              <option value="quality">4B · Quality</option>
+              <option value="tiny">0.8B · Tiny</option>
+              <option value="balanced">2B · Balanced</option>
+              <option value="quality">9B · Quality</option>
             </select>
           </label>
           <label class="pill setting-pill">
@@ -415,7 +415,7 @@
 
   <footer>
     Powered by <a href="https://github.com/MiniMax-AI/MiniMax-Music3" target="_blank">MiniMax Music 3</a> ·
-    <a href="https://github.com/abetlen/llama-cpp-python" target="_blank">llama.cpp runtime</a>
+    <a href="https://github.com/ggml-org/llama.cpp" target="_blank">llama.cpp runtime</a>
   </footer>
 
   <script type="module">
@@ -455,10 +455,10 @@
     };
     const generationModes = new Set(["low-vram", "quality"]);
     const writerDetails = {
-      auto: "Writer: Auto (selects a model for each request)",
-      tiny: "Writer: Qwen3 0.6B Q4_0 (Tiny)",
-      balanced: "Writer: Qwen3 1.7B Q8_0 (Balanced)",
-      quality: "Writer: Qwen3 4B Q4_K_M (Quality)",
+      auto: "Writer: Auto (Qwen 3.5 9B for songs over 3 minutes)",
+      tiny: "Writer: Qwen 3.5 0.8B Q4_K_M (Tiny)",
+      balanced: "Writer: Qwen 3.5 2B Q4_K_M (Balanced)",
+      quality: "Writer: Qwen 3.5 9B Q4_K_M (Quality)",
     };
 
     function generationModeLabel(value) {

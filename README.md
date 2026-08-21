@@ -32,9 +32,18 @@ The app keeps the useful local workflow—browser player, downloads, MP4 sharing
    - **Low VRAM** uses 20 flow steps and tiled decoding on ComfyUI; audio.cpp keeps its 15-step Q4 path.
    - **Quality** uses the Space-compatible 30 steps on ComfyUI and 20 steps on audio.cpp.
 
+The separate **Writer** dropdown controls lyric and production-prompt quality:
+
+- **Auto** selects by hardware for songs up to 3 minutes and uses Qwen 3.5 9B for longer songs.
+- **Tiny** uses Qwen 3.5 0.8B Q4_K_M.
+- **Balanced** uses Qwen 3.5 2B Q4_K_M.
+- **Quality** uses Qwen 3.5 9B Q4_K_M. An explicit selection always overrides Auto.
+
+For vocal songs over 3 minutes, the writer first plans BPM, meter, ordered sections, approximate bars, per-section lyric-line targets, vocal pacing, and production events, then scales those sections to the exact bar total implied by the requested duration and BPM. The lyric pass must satisfy the line target for every section while choosing natural word and syllable density for the requested language. Underfilled or structurally invalid drafts receive a lyrics-only repair before music generation begins; if repair fails, MiniJam stops before spending time generating a predictably short song. Short songs and instrumentals retain the original one-pass path.
+
 The Music dropdown changes generation steps and ComfyUI decoding on each request. On macOS, the separate audio.cpp memory strategy is selected once at startup from installed RAM: fast resident stages at 32 GB or more, stage memory saving below 32 GB.
 
-The local writer closes immediately after composing the song. It defaults to full Metal offload on Apple Silicon and CPU on Windows/Linux so it does not compete with the ComfyUI music model for VRAM. On systems below 40 GB RAM, the music engine is unloaded before the writer runs so both large models are not resident simultaneously.
+The local writer uses the pinned `llama-cpp-python` binding with official Vulkan, Metal, or CPU wheels, produces schema-constrained JSON, and closes immediately after composing the song. On systems below 40 GB RAM, the music engine is unloaded before the writer runs so both large models are not resident simultaneously. Writer GGUF files are downloaded on demand when each option is first used.
 
 The browser reports Writer preparation with an elapsed timer, real ComfyUI sampling progress on Windows/Linux, and audio.cpp AR/flow/vocoder progress on macOS. A first-time Metal kernel compilation has no granular events in audio.cpp, so that phase is shown honestly as indeterminate preparation until the first generation event arrives.
 
@@ -57,7 +66,7 @@ The ZeroGPU allocation, RTX Pro 6000 AoTI kernels, hosted writer, Gradio Space q
 - [ComfyUI](https://github.com/Comfy-Org/ComfyUI) provides the Windows/Linux inference runtime used by MiniJam.
 - MiniJam's native audio.cpp path is derived from [fspecii's audio.cpp low-end GPU fork](https://github.com/fspecii/audio.cpp-lowend-gpu), whose low-memory and performance work made MiniMax Music 3 substantially more practical on constrained hardware.
 - That fork is based on the original [audio.cpp](https://github.com/0xShug0/audio.cpp) project by 0xShug0 / ShugoAI LLC. Both audio.cpp projects are licensed under Apache 2.0; the license bundled beside MiniJam's native server is in `app/audiocpp-LICENSE.txt`.
-- [llama-cpp-python](https://github.com/abetlen/llama-cpp-python) provides the local writer runtime.
+- [llama-cpp-python](https://github.com/abetlen/llama-cpp-python) provides the local Qwen writer binding over llama.cpp.
 
 ## Storage
 
@@ -72,7 +81,6 @@ When an older installation is upgraded, Install removes its obsolete music-model
 Composer environment overrides:
 
 - `MINIMAX_COMPOSER_PROFILE=tiny|balanced|quality`
-- `MINIMAX_COMPOSER_GPU_LAYERS=<number>` (`-1` is the Apple Silicon default for full Metal offload; `0` forces CPU and is the Windows/Linux default)
 
 ## API
 
