@@ -141,7 +141,10 @@ module.exports = {
       params: {
         venv: "env",
         path: "app",
-        message: "uv pip install --index-strategy unsafe-best-match --extra-index-url https://abetlen.github.io/llama-cpp-python/whl/metal --upgrade --force-reinstall llama-cpp-python==0.3.35"
+        message: [
+          "CMAKE_ARGS=\"-DCMAKE_OSX_ARCHITECTURES=arm64 -DCMAKE_APPLE_SILICON_PROCESSOR=arm64 -DGGML_METAL=on\" uv pip install --upgrade --force-reinstall --no-cache --no-binary llama-cpp-python llama-cpp-python==0.3.35",
+          "python -c \"import llama_cpp; assert llama_cpp.__version__ == '0.3.35'; assert llama_cpp.llama_supports_gpu_offload(), 'Metal/GPU offload is unavailable'; print('llama-cpp-python 0.3.35 Metal backend ready')\""
+        ]
       }
     },
     {
@@ -150,7 +153,10 @@ module.exports = {
       params: {
         venv: "env",
         path: "app",
-        message: "uv pip install --index-strategy unsafe-best-match --extra-index-url https://abetlen.github.io/llama-cpp-python/whl/vulkan --upgrade --force-reinstall llama-cpp-python==0.3.35"
+        message: [
+          "uv pip install --index-strategy unsafe-best-match --extra-index-url https://abetlen.github.io/llama-cpp-python/whl/vulkan --upgrade --force-reinstall llama-cpp-python==0.3.35",
+          "python -c \"import llama_cpp; print('llama-cpp-python', llama_cpp.__version__)\""
+        ]
       }
     },
     {
@@ -159,7 +165,10 @@ module.exports = {
       params: {
         venv: "env",
         path: "app",
-        message: "uv pip install --index-strategy unsafe-best-match --extra-index-url https://abetlen.github.io/llama-cpp-python/whl/cpu --upgrade --force-reinstall llama-cpp-python==0.3.35"
+        message: [
+          "uv pip install --index-strategy unsafe-best-match --extra-index-url https://abetlen.github.io/llama-cpp-python/whl/cpu --upgrade --force-reinstall llama-cpp-python==0.3.35",
+          "python -c \"import llama_cpp; print('llama-cpp-python', llama_cpp.__version__)\""
+        ]
       }
     },
     {
