@@ -577,7 +577,30 @@
     // ── Fast video generation (WebCodecs + MP4 muxer) ─────────────────────
     const { Muxer: Mp4MuxerClass, ArrayBufferTarget } = Mp4Muxer;
 
+    function supportsShareVideo() {
+      return window.isSecureContext &&
+        "AudioEncoder" in window &&
+        "VideoEncoder" in window &&
+        "AudioData" in window &&
+        "VideoFrame" in window;
+    }
+
+    function downloadAudio(song) {
+      const safeName = (song.title || "song").replace(/[^a-zA-Z0-9 -]/g, "").trim().replace(/\s+/g, "-") || "song";
+      const link = document.createElement("a");
+      link.href = song.audio_url;
+      link.download = `${safeName}.wav`;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+    }
+
     async function generateShareVideo(song, btn) {
+      if (!supportsShareVideo()) {
+        downloadAudio(song);
+        return;
+      }
+
       const origHTML = btn.innerHTML;
       btn.disabled = true;
       btn.textContent = "…";
@@ -748,6 +771,7 @@
         });
       } catch (e) {
         console.error("Video generation failed:", e);
+        downloadAudio(song);
       } finally {
         overlay.remove();
         btn.disabled = false;
