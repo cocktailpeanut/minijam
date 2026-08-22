@@ -10,9 +10,11 @@ module.exports = {
       }
     },
     {
-      method: "script.start",
+      method: "shell.run",
       params: {
-        uri: "install.js"
+        venv: "env",
+        path: "app",
+        message: "uv pip install -r requirements.txt"
       }
     },
     {
