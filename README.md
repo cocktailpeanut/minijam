@@ -25,6 +25,8 @@ The app keeps the useful local workflow—browser player, downloads, MP4 sharing
 
 ## Use
 
+Install with 1-click using Pinokio at [https://pinokio.co/apps/github-com-cocktailpeanut-minijam](https://pinokio.co/apps/github-com-cocktailpeanut-minijam?s=HftQ4bEKjDiuClIGTyye_Q)
+
 1. Click **Install**. The launcher installs the appropriate engine and downloads the MiniMax weights.
 2. Click **Start**, then open **MiniJam**.
 3. Describe a song, select a duration from 30 seconds through 5 minutes and optional instrumental mode, then click **Generate**.
