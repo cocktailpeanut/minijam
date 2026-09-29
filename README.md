@@ -21,6 +21,7 @@ The app keeps the useful local workflow—browser player, downloads, MP4 sharing
 - Windows/Linux: an NVIDIA GPU is recommended. The INT8/DynamicVRAM path targets GPUs down to 8 GB VRAM, but this is a best-effort low-memory configuration and needs ample system RAM. This migration was smoke-tested on a 19 GB GPU; 8 GB hardware was not available locally for validation.
 - Apple Silicon: an arm64 Mac with enough unified memory for the Q4 model set.
 - At least 32 GB system RAM is recommended; 48 GB gives the low-VRAM offload path more headroom.
+- Without a supported GPU (for example Intel integrated graphics), MiniJam starts ComfyUI in CPU mode instead of failing. That path is a fallback only: a song can take hours and the INT8 weights need most of system RAM, so keep durations short and use the Low VRAM music mode.
 - No Hugging Face token is required for the public models.
 
 ## Use

@@ -33,7 +33,7 @@ module.exports = {
         env: {
           TOKENIZERS_PARALLELISM: "false"
         },
-        message: "{{platform === 'win32' && gpu === 'amd' ? 'python main.py --directml' : 'python main.py'}} --listen 127.0.0.1 --port {{port}} --disable-api-nodes",
+        message: "{{platform === 'win32' && gpu === 'amd' ? 'python main.py --directml' : gpu === 'nvidia' || gpu === 'amd' ? 'python main.py' : 'python main.py --cpu'}} --listen 127.0.0.1 --port {{port}} --disable-api-nodes",
         on: [{
           event: "/(http:\\/\\/[0-9.:]+)/",
           done: true
